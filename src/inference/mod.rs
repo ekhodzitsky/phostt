@@ -580,7 +580,10 @@ impl Engine {
                 .collect();
             handles
                 .into_iter()
-                .map(|h| h.join().expect("Thread panicked during model loading"))
+                .map(|h| {
+                    h.join()
+                        .map_err(|_| anyhow::anyhow!("Thread panicked during model loading"))?
+                })
                 .collect::<anyhow::Result<Vec<_>>>()
         })?;
 
@@ -626,7 +629,10 @@ impl Engine {
     /// encoder, the flag is silently ignored (a `warn!` is emitted when the
     /// caller asked for diarization but the build does not support it, so the
     /// contract mismatch is visible in logs).
-    pub fn create_state(&self, diarization_enabled: bool) -> StreamingState {
+    pub fn create_state(
+        &self,
+        diarization_enabled: bool,
+    ) -> Result<StreamingState, GigasttError> {
         #[cfg(feature = "diarization")]
         let diarization_state = if diarization_enabled && self.speaker_encoder.is_some() {
             Some(DiarizationStreamState {
@@ -646,10 +652,10 @@ impl Engine {
         }
 
         let computer = FbankComputer::new(features::phostt_fbank_options())
-            .expect("FBANK options valid");
+            .map_err(|e| GigasttError::Inference(format!("FBANK init failed: {e}")))?;
         let online = OnlineFeature::new(FeatureComputer::Fbank(computer));
 
-        StreamingState {
+        Ok(StreamingState {
             decoder: DecoderState::new(self.tokenizer.blank_id()),
             online,
             frames_seen: 0,
@@ -660,7 +666,7 @@ impl Engine {
             prev_window_words: Vec::new(),
             #[cfg(feature = "diarization")]
             diarization_state,
-        }
+        })
     }
 
     /// Process a chunk of 16kHz f32 audio samples and return any new transcript segments.
@@ -1310,7 +1316,7 @@ mod tests {
         let offline = engine.transcribe_samples(&samples, &mut triplet).unwrap();
         let offline_text = offline.text;
 
-        let mut state = engine.create_state(false);
+        let mut state = engine.create_state(false).unwrap();
         let chunk_size = samples.len() / 3;
         let chunks = vec![
             &samples[..chunk_size],

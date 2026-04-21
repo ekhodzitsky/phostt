@@ -359,7 +359,13 @@ pub async fn transcribe_stream(
 
         // catch_unwind ensures triplet is returned to pool even on panic
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut stream_state = engine.create_state(false);
+            let mut stream_state = match engine.create_state(false) {
+                Ok(s) => s,
+                Err(e) => {
+                    let _ = tx.blocking_send(Err(format!("{e}")));
+                    return;
+                }
+            };
             let chunk_size = 16000; // 1 second at 16kHz
 
             for chunk in samples.chunks(chunk_size) {

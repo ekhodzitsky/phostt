@@ -853,7 +853,13 @@ async fn handle_binary_frame(
                 "Panic in WS inference for {peer} — triplet recovered, streaming state reset"
             );
             *triplet_opt = Some(triplet_back);
-            *state_opt = Some(engine.create_state(false));
+            match engine.create_state(false) {
+            Ok(state) => *state_opt = Some(state),
+            Err(e) => {
+                tracing::error!("Failed to create streaming state after panic: {e}");
+                // Session will error out on next frame
+            }
+        }
             send_server_message(
                 sink,
                 &ServerMessage::Error {
@@ -921,7 +927,11 @@ async fn handle_configure_message(
     #[cfg(feature = "diarization")]
     if let Some(enable_dia) = diarization {
         tracing::info!("Client {peer} configured diarization: {enable_dia}");
-        *state_opt = Some(engine.create_state(enable_dia));
+        *state_opt = Some(
+            engine
+                .create_state(enable_dia)
+                .map_err(|e| anyhow::anyhow!("State init failed: {e}"))?,
+        );
     }
     #[cfg(not(feature = "diarization"))]
     {
@@ -1032,7 +1042,13 @@ async fn handle_ws_inner(
         return (Some(triplet), Err(e));
     }
 
-    let mut state_opt = Some(engine.create_state(false));
+    let mut state_opt = match engine.create_state(false) {
+        Ok(state) => Some(state),
+        Err(e) => {
+            tracing::error!("State init failed: {e}");
+            return (Some(triplet), Err(anyhow::anyhow!("State init failed: {e}")));
+        }
+    };
     let mut triplet_opt = Some(triplet);
     let mut client_sample_rate: u32 = DEFAULT_SAMPLE_RATE;
     let mut audio_received = false;
