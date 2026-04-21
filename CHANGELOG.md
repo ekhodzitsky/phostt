@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- FFI layer for Android (`src/ffi.rs`): C-ABI exposing `phostt_engine_new`,
+  `phostt_transcribe_file`, `phostt_string_free`, `phostt_engine_free`.
+- Kotlin JNI bridge skeleton (`ffi/android/PhosttBridge.kt`).
+- Android build docs (`ANDROID.md`) with NDK setup, model bundling strategies,
+  and Kotlin integration guide.
+- `cargo-ndk` linker config (`.cargo/config.toml`) for arm64, armv7, x86_64,
+  i686 Android targets.
+- Benchmark harness (`benches/latency.rs`) using Criterion for offline
+  transcription latency measurement.
+- WER regression test (`tests/wer.rs`) against Vietnamese test WAVs with
+  reference transcripts.
+- `Pool::checkout_blocking` synchronous pool checkout for FFI consumers.
+- `Engine::transcribe_samples` made public (exposed to FFI).
+- `ffi` Cargo feature pulling in `ort/nnapi` for Android NPU/DSP acceleration.
+
 ## [0.1.0] - YYYY-MM-DD
 
 ### Added

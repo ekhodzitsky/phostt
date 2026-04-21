@@ -159,6 +159,20 @@ impl<T> Pool<T> {
         }
     }
 
+    /// Checkout an item from the pool synchronously (blocks until one is
+    /// available).  This is the FFI-friendly counterpart to [`checkout`](Self::checkout).
+    ///
+    /// Returns [`PoolError::Closed`] if the pool was shut down.
+    pub fn checkout_blocking(&self) -> Result<PoolGuard<'_, T>, PoolError> {
+        match self.receiver.recv_blocking() {
+            Ok(item) => Ok(PoolGuard {
+                pool: self,
+                item: Some(item),
+            }),
+            Err(_) => Err(PoolError::Closed),
+        }
+    }
+
     /// Close the pool: all current and future [`checkout`](Self::checkout)
     /// callers resolve to [`PoolError::Closed`]. Used by graceful shutdown.
     /// Idempotent.
@@ -888,7 +902,7 @@ impl Engine {
     /// Run the full mel + encoder + RNN-T decode pipeline on an already-decoded
     /// 16 kHz f32 sample buffer. Shared tail of [`Engine::transcribe_file`] and
     /// [`Engine::transcribe_bytes_shared`].
-    fn transcribe_samples(
+    pub fn transcribe_samples(
         &self,
         float_samples: &[f32],
         triplet: &mut SessionTriplet,

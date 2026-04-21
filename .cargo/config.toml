@@ -1,0 +1,17 @@
+# Android NDK linker configuration for cargo-ndk builds.
+#
+# Adjust the API level (35) to match your installed NDK version.
+# Common values: 28 (Android 9), 30 (Android 11), 33 (Android 13), 35 (Android 15).
+# The NDK toolchain binaries live inside $NDK_HOME/toolchains/llvm/prebuilt/<host>/bin/.
+
+[target.aarch64-linux-android]
+linker = "aarch64-linux-android35-clang"
+
+[target.armv7-linux-androideabi]
+linker = "armv7a-linux-androideabi35-clang"
+
+[target.x86_64-linux-android]
+linker = "x86_64-linux-android35-clang"
+
+[target.i686-linux-android]
+linker = "i686-linux-android35-clang"

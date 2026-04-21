@@ -32,3 +32,6 @@ pub mod inspect;
 pub mod model;
 pub mod protocol;
 pub mod server;
+
+#[cfg(feature = "ffi")]
+pub mod ffi;

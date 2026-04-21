@@ -15,6 +15,7 @@ default = []
 coreml = ["ort/coreml"]
 cuda = ["ort/cuda"]
 diarization = []
+ffi = ["ort/nnapi"]
 [dependencies]
 # ONNX Runtime
 ort = "2.0.0-rc.12"
@@ -93,6 +94,8 @@ dashmap = "6"
 [dev-dependencies]
 tempfile = "3"
 tokio-tungstenite = "0.29"
+criterion = { version = "0.5", features = ["html_reports"] }
+tract-onnx = "0.22.1"
 # `tracing-subscriber` is declared in `[dependencies]`; cargo already exposes
 # it to integration tests, so no separate dev-dep is needed.
 
@@ -100,3 +103,7 @@ tokio-tungstenite = "0.29"
 lto = true
 codegen-units = 1
 strip = true
+
+[[bench]]
+name = "latency"
+harness = false
