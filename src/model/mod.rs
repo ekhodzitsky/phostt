@@ -263,7 +263,16 @@ async fn stream_to_partial_then_finalize(
 
     tracing::info!("Downloading {label}...");
 
-    let response = reqwest::get(url).await.context("HTTP request failed")?;
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(600))
+        .build()
+        .context("Failed to build HTTP client")?;
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .context("HTTP request failed")?;
     let status = response.status();
     if !status.is_success() {
         anyhow::bail!("Download failed for {label}: HTTP {status}");
@@ -336,6 +345,16 @@ fn extract_bundle(archive: &Path, dest_dir: &Path) -> Result<()> {
         if relative.is_absolute() {
             anyhow::bail!(
                 "Refusing to extract {}: absolute path in archive entry",
+                relative.display()
+            );
+        }
+
+        // Reject symlinks and hard links — they can escape dest_dir even when
+        // the path itself looks relative.
+        let entry_type = entry.header().entry_type();
+        if entry_type.is_symlink() || entry_type.is_hard_link() {
+            anyhow::bail!(
+                "Refusing to extract {}: symlink/hardlink entries are not allowed",
                 relative.display()
             );
         }
