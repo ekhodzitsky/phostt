@@ -45,6 +45,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No-op `quantize` feature flag removed from `Cargo.toml` (Zipformer-vi ships
   pre-quantized; in-tree quantizer was dead weight).
 
+## [0.2.1] - 2026-04-21
+
+### Fixed
+
+- **Critical** — Eliminated O(n²) latency degradation in streaming by replacing
+  `String`/`Vec` clones with `Arc<String>`/`Arc<Vec<WordInfo>>` in
+  `StreamingState` and `TranscriptSegment`.
+- **Critical** — Replaced `.expect()` panics in `Engine::load_inner` and
+  `Engine::create_state` with proper `Result` returns. Server no longer crashes
+  on thread panic during model load or FBANK init failure.
+
+### Security
+
+- `extract_bundle`: reject symlink and hard-link entries in tar archives to
+  prevent directory-traversal attacks.
+
+### Changed
+
+- `sha256_file`: use `BufReader` with 64KB chunks instead of loading the entire
+  ~850MB model file into RAM.
+- `stream_to_partial_then_finalize`: add 30s connect timeout and 10min total
+  request timeout.
+
+### Refactored
+
+- `tokens_to_words`: removed duplicate empty-token guard.
+- All `create_state` callers updated to handle `Result`.
+
 ## [0.1.0] - YYYY-MM-DD
 
 ### Added
