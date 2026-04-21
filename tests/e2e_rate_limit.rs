@@ -17,7 +17,7 @@ use std::time::Duration;
 #[ignore]
 async fn test_rate_limit_burst_then_refill() {
     let model_dir = common::model_dir();
-    let limits = gigastt::server::RuntimeLimits {
+    let limits = phostt::server::RuntimeLimits {
         rate_limit_per_minute: 30,
         rate_limit_burst: 1,
         ..Default::default()

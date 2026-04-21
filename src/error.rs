@@ -1,4 +1,4 @@
-//! Error types for the gigastt public API.
+//! Error types for the phostt public API.
 //!
 //! [`GigasttError`] is the primary error type returned by [`Engine`](crate::inference::Engine)
 //! methods. It provides structured error variants so consumers can match on specific
@@ -6,7 +6,7 @@
 
 use std::fmt;
 
-/// Errors returned by gigastt public API methods.
+/// Errors returned by phostt public API methods.
 ///
 /// This enum covers the main failure categories:
 /// - Model loading failures ([`ModelLoad`](GigasttError::ModelLoad))
@@ -17,7 +17,7 @@ use std::fmt;
 /// # Matching on errors
 ///
 /// ```ignore
-/// use gigastt::error::GigasttError;
+/// use phostt::error::GigasttError;
 ///
 /// match err {
 ///     GigasttError::ModelLoad(msg) => eprintln!("Model problem: {msg}"),

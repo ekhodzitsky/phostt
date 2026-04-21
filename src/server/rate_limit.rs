@@ -2,7 +2,7 @@
 //!
 //! Replaces the `tower_governor` crate (which pulled `governor`, `dashmap`,
 //! `quanta`, `parking_lot`, and `forwarded-header-value`) with a focused
-//! ~150-line implementation tailored to gigastt's single middleware hook.
+//! ~150-line implementation tailored to phostt's single middleware hook.
 //!
 //! Semantics match the V1-06 formula: `refill_per_ms = rpm / 60_000.0`, so
 //! `--rate-limit-per-minute 30` allows one token every 2 s with a configurable

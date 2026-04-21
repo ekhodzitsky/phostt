@@ -1,4 +1,4 @@
-//! BPE tokenizer for GigaAM v3 e2e_rnnt.
+//! BPE tokenizer for Zipformer-vi RNN-T.
 
 use anyhow::{Context, Result};
 use std::path::Path;

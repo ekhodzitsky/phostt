@@ -1,8 +1,8 @@
 //! INT8 static weight quantization for ONNX encoder models (QDQ node insertion).
 //!
 //! Native Rust replacement for `scripts/quantize.py`. Auto-invoked after
-//! `gigastt download` and `gigastt serve` (see `src/main.rs`); also exposed
-//! as the `gigastt quantize` subcommand.
+//! `phostt download` and `phostt serve` (see `src/main.rs`); also exposed
+//! as the `phostt quantize` subcommand.
 //!
 //! The protobuf types come from `crate::onnx_proto`, which is generated at
 //! build time from `proto/onnx.proto` via `prost-build` (see `build.rs`).
@@ -312,7 +312,7 @@ mod tests {
         // generated prost codec without losing fields.
         let model = ModelProto {
             ir_version: Some(8),
-            producer_name: Some("gigastt-test".into()),
+            producer_name: Some("phostt-test".into()),
             graph: Some(crate::onnx_proto::GraphProto {
                 name: Some("tiny".into()),
                 node: vec![NodeProto {
@@ -329,7 +329,7 @@ mod tests {
         model.encode(&mut bytes).unwrap();
         let decoded = ModelProto::decode(&bytes[..]).unwrap();
         assert_eq!(decoded.ir_version(), 8);
-        assert_eq!(decoded.producer_name(), "gigastt-test");
+        assert_eq!(decoded.producer_name(), "phostt-test");
         let g = decoded.graph.as_ref().unwrap();
         assert_eq!(g.name(), "tiny");
         assert_eq!(g.node.len(), 1);

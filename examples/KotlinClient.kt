@@ -1,4 +1,4 @@
-// WebSocket client for gigastt — streams a WAV file and prints transcription.
+// WebSocket client for phostt — streams a WAV file and prints transcription.
 //
 // Dependencies (Gradle):
 //   implementation("com.squareup.okhttp3:okhttp:4.12.0")

@@ -1,6 +1,6 @@
 //! End-to-end WebSocket protocol tests.
 //!
-//! All tests require the GigaAM ONNX model to be downloaded (~850MB).
+//! All tests require the Zipformer-vi ONNX model to be downloaded (~850MB).
 //! Run with: `cargo test --test e2e_ws -- --ignored`
 
 mod common;
@@ -25,8 +25,8 @@ async fn test_ws_connect_receives_ready() {
     assert_eq!(ready["version"], "1.0");
     assert_eq!(ready["sample_rate"], 48000);
     assert!(
-        ready["model"].as_str().unwrap().contains("gigaam"),
-        "model field should contain 'gigaam', got: {:?}",
+        ready["model"].as_str().unwrap().contains("zipformer"),
+        "model field should contain 'zipformer', got: {:?}",
         ready["model"]
     );
 

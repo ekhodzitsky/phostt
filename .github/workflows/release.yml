@@ -99,10 +99,10 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           VERSION="${TAG#v}"
-          ASSET="gigastt-${VERSION}-${SUFFIX}.tar.gz"
+          ASSET="phostt-${VERSION}-${SUFFIX}.tar.gz"
 
           STAGE="$(mktemp -d)"
-          cp "target/${TARGET}/release/gigastt" "$STAGE/gigastt"
+          cp "target/${TARGET}/release/phostt" "$STAGE/phostt"
           cp LICENSE README.md CHANGELOG.md "$STAGE/" 2>/dev/null || true
 
           tar -C "$STAGE" -czf "$ASSET" .
@@ -114,7 +114,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: gigastt-${{ matrix.asset_suffix }}
+          name: phostt-${{ matrix.asset_suffix }}
           path: |
             ${{ steps.package.outputs.asset }}
             ${{ steps.package.outputs.sha_file }}
@@ -176,13 +176,13 @@ jobs:
           cargo cyclonedx --format json --spec-version 1.5
           mkdir -p dist
           # Pin the artifact name to the release tag for reproducibility.
-          cp gigastt.cdx.json "dist/gigastt-${VERSION}.cdx.json"
-          ls -la "dist/gigastt-${VERSION}.cdx.json"
+          cp phostt.cdx.json "dist/phostt-${VERSION}.cdx.json"
+          ls -la "dist/phostt-${VERSION}.cdx.json"
 
       # SUS-05: SLSA build provenance attestation. Every artefact in
       # `dist/` gets a signed in-toto provenance statement anchored to
       # this workflow run. Downstream consumers verify with
-      # `gh attestation verify <file> --repo ekhodzitsky/gigastt`.
+      # `gh attestation verify <file> --repo ekhodzitsky/phostt`.
       - name: Generate SLSA build provenance
         uses: actions/attest-build-provenance@v4
         with:
@@ -222,8 +222,8 @@ jobs:
             # minisign reads it from stdin instead of prompting.
             printf '%s\n' "$MINISIGN_PASSWORD" | \
               minisign -Sm "$f" -s minisign.key \
-                -c "gigastt release $(basename "$f")" \
-                -t "gigastt $(basename "$f") ${{ steps.tag.outputs.tag }}"
+                -c "phostt release $(basename "$f")" \
+                -t "phostt $(basename "$f") ${{ steps.tag.outputs.tag }}"
           done
           shred -u minisign.key 2>/dev/null || rm -f minisign.key
           ls -la ./*.minisig

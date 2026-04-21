@@ -6,7 +6,7 @@
 cargo build                            # CPU debug build
 cargo build --features coreml          # macOS ARM64 with CoreML
 cargo build --features cuda            # Linux x86_64 with CUDA 12+
-cargo build --features quantize        # adds `gigastt quantize` subcommand
+cargo build --features quantize        # no-op — kept for backwards compatibility
 
 cargo test                             # unit tests (no model needed)
 cargo clippy --all-targets -- -D warnings
@@ -35,17 +35,17 @@ source of truth, and out-of-band uploads break SHA-pinned clients (e.g. Murmur).
 4. **Commit**: `chore: bump version to x.y.z, update CHANGELOG`.
 5. **Tag & push** (signed):
    ```sh
-   git tag -s vx.y.z -m "gigastt vx.y.z"
+   git tag -s vx.y.z -m "phostt vx.y.z"
    git push origin main --tags
    ```
 6. **Wait for the release workflow** to finish on GitHub Actions.
    It must produce:
-   - `gigastt-x.y.z-aarch64-apple-darwin.tar.gz`
-   - `gigastt-x.y.z-x86_64-unknown-linux-gnu.tar.gz`
+   - `phostt-x.y.z-aarch64-apple-darwin.tar.gz`
+   - `phostt-x.y.z-x86_64-unknown-linux-gnu.tar.gz`
    - `SHA256SUMS.txt`
    - Per-asset `*.sha256` files
 
-   The CUDA Linux build is not yet automated — see `specs/todo.md` (Phase 0 addendum). Until it lands, CUDA users build from source.
+   The CUDA Linux build is not yet automated. Until it lands, CUDA users build from source.
 7. **Verify the release page** on GitHub — all assets attached, release notes generated.
 8. **Publish to crates.io** (only after step 7):
    ```sh

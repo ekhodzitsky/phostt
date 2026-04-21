@@ -1,4 +1,4 @@
-//! WebSocket protocol messages for gigastt.
+//! WebSocket protocol messages for phostt.
 
 use serde::{Deserialize, Serialize};
 
@@ -12,7 +12,7 @@ pub const PROTOCOL_VERSION: &str = "1.0";
 pub enum ServerMessage {
     /// Server is ready to accept audio.
     Ready {
-        /// Model identifier (e.g., `"gigaam-v3-e2e-rnnt"`).
+        /// Model identifier (e.g., `"zipformer-vi-rnnt"`).
         model: String,
         /// Default audio sample rate in Hz (48000 for backward compatibility).
         sample_rate: u32,

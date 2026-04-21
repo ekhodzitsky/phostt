@@ -1,6 +1,6 @@
-# Multi-stage build for gigastt
-# Build: docker build -t gigastt .
-# Run:   docker run -p 9876:9876 gigastt
+# Multi-stage build for phostt
+# Build: docker build -t phostt .
+# Run:   docker run -p 9876:9876 phostt
 
 # --- Builder stage ---
 FROM rust:1.85-bookworm AS builder
@@ -23,50 +23,50 @@ RUN mkdir -p src && \
     echo 'fn main() {}' > src/main.rs && \
     touch src/lib.rs && \
     cargo build --release && \
-    rm -rf src target/release/deps/gigastt-* target/release/gigastt*
+    rm -rf src target/release/deps/phostt-* target/release/phostt*
 
 # Now bring in the actual source and build the real binary.
 COPY src/ src/
 
 RUN cargo build --release && \
-    strip target/release/gigastt
+    strip target/release/phostt
 
-# --- Model bake stage (runs only when GIGASTT_BAKE_MODEL=1) ---
+# --- Model bake stage (runs only when PHOSTT_BAKE_MODEL=1) ---
 FROM debian:bookworm-slim AS model-fetcher
 
-ARG GIGASTT_BAKE_MODEL=0
+ARG PHOSTT_BAKE_MODEL=0
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /build/target/release/gigastt /usr/local/bin/gigastt
+COPY --from=builder /build/target/release/phostt /usr/local/bin/phostt
 
 RUN mkdir -p /models && \
-    if [ "$GIGASTT_BAKE_MODEL" = "1" ]; then \
-        gigastt download --model-dir /models; \
+    if [ "$PHOSTT_BAKE_MODEL" = "1" ]; then \
+        phostt download --model-dir /models; \
     fi
 
 # --- Runtime stage ---
 FROM debian:bookworm-slim
 
-ARG GIGASTT_BAKE_MODEL=0
+ARG PHOSTT_BAKE_MODEL=0
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates curl && \
     rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /build/target/release/gigastt /usr/local/bin/gigastt
+COPY --from=builder /build/target/release/phostt /usr/local/bin/phostt
 
-RUN groupadd -r gigastt && useradd -r -g gigastt gigastt && \
-    mkdir -p /home/gigastt/.gigastt/models && chown -R gigastt:gigastt /home/gigastt
+RUN groupadd -r phostt && useradd -r -g phostt phostt && \
+    mkdir -p /home/phostt/.phostt/models && chown -R phostt:phostt /home/phostt
 
-# Copy baked model files (only present when GIGASTT_BAKE_MODEL=1)
-COPY --from=model-fetcher --chown=gigastt:gigastt /models/. /home/gigastt/.gigastt/models/
+# Copy baked model files (only present when PHOSTT_BAKE_MODEL=1)
+COPY --from=model-fetcher --chown=phostt:phostt /models/. /home/phostt/.phostt/models/
 
-USER gigastt
+USER phostt
 
-ENV RUST_LOG=gigastt=info
+ENV RUST_LOG=phostt=info
 
 EXPOSE 9876
 
@@ -76,5 +76,5 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
 # Download model if not present, then start server.
 # `--bind-all` acknowledges that container networking requires listening on
 # 0.0.0.0; outside Docker the default `127.0.0.1` bind stays in effect.
-ENTRYPOINT ["gigastt"]
+ENTRYPOINT ["phostt"]
 CMD ["serve", "--port", "9876", "--host", "0.0.0.0", "--bind-all"]

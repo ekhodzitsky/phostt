@@ -1,10 +1,10 @@
-//! Graceful shutdown + session-cap tests for the gigastt server (V1-03 / V1-04).
+//! Graceful shutdown + session-cap tests for the phostt server (V1-03 / V1-04).
 //!
 //! Verifies that in-flight WebSocket sessions and SSE streams terminate cleanly
 //! when the server receives a shutdown signal, rather than hanging forever, and
 //! that long-running WS sessions are capped by wall-clock duration.
 //!
-//! All tests require the GigaAM ONNX model to be downloaded (~850MB).
+//! All tests require the Zipformer-vi ONNX model to be downloaded (~850MB).
 //! Run with: `cargo test --test e2e_shutdown -- --ignored --test-threads=1`
 
 mod common;
@@ -112,7 +112,7 @@ async fn test_shutdown_during_sse_stream() {
 async fn test_shutdown_ws_emits_final_and_close() {
     let model_dir = common::model_dir();
     // Use custom limits so the drain window is generous even on slow CI.
-    let limits = gigastt::server::RuntimeLimits {
+    let limits = phostt::server::RuntimeLimits {
         shutdown_drain_secs: 10,
         ..Default::default()
     };
@@ -176,7 +176,7 @@ async fn test_shutdown_ws_emits_final_and_close() {
 #[ignore] // Requires model download
 async fn test_shutdown_sse_stream_terminates_cleanly() {
     let model_dir = common::model_dir();
-    let limits = gigastt::server::RuntimeLimits {
+    let limits = phostt::server::RuntimeLimits {
         shutdown_drain_secs: 10,
         ..Default::default()
     };
@@ -232,10 +232,10 @@ async fn test_shutdown_sse_stream_terminates_cleanly() {
 #[ignore] // Requires model download
 async fn test_max_session_duration_cap() {
     let _ = tracing_subscriber::fmt()
-        .with_env_filter("gigastt=debug")
+        .with_env_filter("phostt=debug")
         .try_init();
     let model_dir = common::model_dir();
-    let limits = gigastt::server::RuntimeLimits {
+    let limits = phostt::server::RuntimeLimits {
         max_session_secs: 3,
         ..Default::default()
     };

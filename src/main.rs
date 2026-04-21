@@ -1,14 +1,14 @@
 use clap::{Parser, Subcommand};
-use gigastt::server::{OriginPolicy, RuntimeLimits, ServerConfig};
-use gigastt::{inference, model, server};
+use phostt::server::{OriginPolicy, RuntimeLimits, ServerConfig};
+use phostt::{inference, model, server};
 use std::net::IpAddr;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
 #[command(
-    name = "gigastt",
+    name = "phostt",
     version,
-    about = "Local STT server powered by GigaAM v3"
+    about = "Local STT server powered by Zipformer-vi"
 )]
 struct Cli {
     /// Log level [default: info]
@@ -40,7 +40,7 @@ enum Commands {
         pool_size: usize,
 
         /// Explicitly acknowledge binding to a non-loopback address.
-        /// Can also be enabled via `GIGASTT_ALLOW_BIND_ANY=1`.
+        /// Can also be enabled via `PHOSTT_ALLOW_BIND_ANY=1`.
         /// Without this flag the server refuses to listen on anything other than
         /// 127.0.0.1 / ::1 / localhost to prevent accidental public exposure.
         #[arg(long, default_value_t = false)]
@@ -60,49 +60,49 @@ enum Commands {
 
         /// WebSocket idle timeout (seconds). Server closes the connection
         /// when no frame arrives within this window.
-        #[arg(long, env = "GIGASTT_IDLE_TIMEOUT_SECS", default_value_t = 300)]
+        #[arg(long, env = "PHOSTT_IDLE_TIMEOUT_SECS", default_value_t = 300)]
         idle_timeout_secs: u64,
 
         /// Maximum WebSocket frame / message size (bytes).
-        #[arg(long, env = "GIGASTT_WS_FRAME_MAX_BYTES", default_value_t = 512 * 1024)]
+        #[arg(long, env = "PHOSTT_WS_FRAME_MAX_BYTES", default_value_t = 512 * 1024)]
         ws_frame_max_bytes: usize,
 
         /// Maximum REST request body size (bytes).
-        #[arg(long, env = "GIGASTT_BODY_LIMIT_BYTES", default_value_t = 50 * 1024 * 1024)]
+        #[arg(long, env = "PHOSTT_BODY_LIMIT_BYTES", default_value_t = 50 * 1024 * 1024)]
         body_limit_bytes: usize,
 
         /// Per-IP rate limit — requests per minute. 0 = off (default).
-        #[arg(long, env = "GIGASTT_RATE_LIMIT_PER_MINUTE", default_value_t = 0)]
+        #[arg(long, env = "PHOSTT_RATE_LIMIT_PER_MINUTE", default_value_t = 0)]
         rate_limit_per_minute: u32,
 
         /// Rate-limit burst size (default 10).
-        #[arg(long, env = "GIGASTT_RATE_LIMIT_BURST", default_value_t = 10)]
+        #[arg(long, env = "PHOSTT_RATE_LIMIT_BURST", default_value_t = 10)]
         rate_limit_burst: u32,
 
         /// Expose Prometheus metrics at `GET /metrics`. Off by default —
         /// keeps the server quiet for single-user installs. The endpoint is
         /// attached to the protected router so the Origin allowlist applies.
-        #[arg(long, env = "GIGASTT_METRICS", default_value_t = false)]
+        #[arg(long, env = "PHOSTT_METRICS", default_value_t = false)]
         metrics: bool,
 
         /// Maximum wall-clock duration of a single WebSocket session (seconds).
         /// `0` disables the cap (not recommended — a silence-streaming client
         /// will hold a triplet forever).
-        #[arg(long, env = "GIGASTT_MAX_SESSION_SECS", default_value_t = 3600)]
+        #[arg(long, env = "PHOSTT_MAX_SESSION_SECS", default_value_t = 3600)]
         max_session_secs: u64,
 
         /// Grace window (seconds) after shutdown during which in-flight
         /// WebSocket / SSE sessions may emit their Final frames and close.
         /// Values of `0` are clamped to `1`. Should comfortably fit inside
         /// your orchestrator's `terminationGracePeriodSeconds`.
-        #[arg(long, env = "GIGASTT_SHUTDOWN_DRAIN_SECS", default_value_t = 10)]
+        #[arg(long, env = "PHOSTT_SHUTDOWN_DRAIN_SECS", default_value_t = 10)]
         shutdown_drain_secs: u64,
 
         /// Skip the automatic INT8 quantization step after download.
         /// Default behaviour is to quantize the encoder (~2 min, one-time)
         /// so the pool loads the 210 MB INT8 encoder instead of the 844 MB
         /// FP32. Opt out when you need the FP32 encoder for debugging.
-        #[arg(long, env = "GIGASTT_SKIP_QUANTIZE", default_value_t = false)]
+        #[arg(long, env = "PHOSTT_SKIP_QUANTIZE", default_value_t = false)]
         skip_quantize: bool,
     },
 
@@ -119,9 +119,9 @@ enum Commands {
 
         /// Skip the automatic INT8 quantization step after download.
         /// Default behaviour is to quantize the encoder (~2 min, one-time)
-        /// so subsequent `gigastt serve` calls load the 210 MB INT8 encoder.
+        /// so subsequent `phostt serve` calls load the 210 MB INT8 encoder.
         /// Opt out when you need the FP32 encoder for debugging.
-        #[arg(long, env = "GIGASTT_SKIP_QUANTIZE", default_value_t = false)]
+        #[arg(long, env = "PHOSTT_SKIP_QUANTIZE", default_value_t = false)]
         skip_quantize: bool,
     },
 
@@ -173,13 +173,13 @@ fn log_rss() {
 
 /// Guard non-loopback binds. Privacy-first default: the server will only
 /// listen on 127.0.0.1 / ::1 / localhost unless the operator opts in via
-/// `--bind-all` or `GIGASTT_ALLOW_BIND_ANY=1`. Mirrors the intent of Docker's
+/// `--bind-all` or `PHOSTT_ALLOW_BIND_ANY=1`. Mirrors the intent of Docker's
 /// `--host 0.0.0.0` — explicit consent to expose a local STT service.
 fn ensure_bind_allowed(host: &str, bind_all_flag: bool) -> anyhow::Result<()> {
     if is_loopback_host(host) {
         return Ok(());
     }
-    let env_opt_in = std::env::var("GIGASTT_ALLOW_BIND_ANY")
+    let env_opt_in = std::env::var("PHOSTT_ALLOW_BIND_ANY")
         .map(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "yes" | "YES"))
         .unwrap_or(false);
     if bind_all_flag || env_opt_in {
@@ -191,7 +191,7 @@ fn ensure_bind_allowed(host: &str, bind_all_flag: bool) -> anyhow::Result<()> {
     }
     anyhow::bail!(
         "refusing to bind to '{host}': non-loopback addresses require \
-         `--bind-all` (or env GIGASTT_ALLOW_BIND_ANY=1) to prevent accidental \
+         `--bind-all` (or env PHOSTT_ALLOW_BIND_ANY=1) to prevent accidental \
          public exposure of local transcription"
     )
 }
@@ -232,7 +232,7 @@ fn ensure_int8_encoder(model_dir: &str, skip: bool) -> anyhow::Result<()> {
         );
     }
     tracing::info!("Quantizing encoder to INT8 (~2 min, one-time)…");
-    gigastt::quantize::quantize_model(&input, &int8_path)?;
+    phostt::quantize::quantize_model(&input, &int8_path)?;
     tracing::info!("INT8 encoder saved to {}", int8_path.display());
     Ok(())
 }
@@ -263,15 +263,15 @@ mod tests {
     fn test_ensure_bind_allowed_non_loopback_requires_flag() {
         // Temporarily strip any env opt-in that might exist on the runner.
         // SAFETY: single-threaded test harness inside this fn body; env mutation is fine.
-        let previous = std::env::var("GIGASTT_ALLOW_BIND_ANY").ok();
+        let previous = std::env::var("PHOSTT_ALLOW_BIND_ANY").ok();
         // SAFETY: tests are run sequentially within this module — transient env mutation.
         unsafe {
-            std::env::remove_var("GIGASTT_ALLOW_BIND_ANY");
+            std::env::remove_var("PHOSTT_ALLOW_BIND_ANY");
         }
         let result = ensure_bind_allowed("0.0.0.0", false);
         if let Some(v) = previous {
             unsafe {
-                std::env::set_var("GIGASTT_ALLOW_BIND_ANY", v);
+                std::env::set_var("PHOSTT_ALLOW_BIND_ANY", v);
             }
         }
         assert!(
@@ -290,7 +290,7 @@ mod tests {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    let directive = format!("gigastt={}", cli.log_level);
+    let directive = format!("phostt={}", cli.log_level);
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive(directive.parse()?))
         .init();
@@ -364,7 +364,7 @@ async fn main() -> anyhow::Result<()> {
                 tracing::info!("Use --force to re-quantize.");
                 return Ok(());
             }
-            gigastt::quantize::quantize_model(&input, &output)?;
+            phostt::quantize::quantize_model(&input, &output)?;
             tracing::info!("Quantized model saved to {}", output.display());
         }
         Commands::Transcribe { file, model_dir } => {

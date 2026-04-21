@@ -1,6 +1,6 @@
-# Multi-stage build for gigastt with CUDA support
-# Build: docker build -f Dockerfile.cuda -t gigastt-cuda .
-# Run:   docker run --gpus all -p 9876:9876 gigastt-cuda
+# Multi-stage build for phostt with CUDA support
+# Build: docker build -f Dockerfile.cuda -t phostt-cuda .
+# Run:   docker run --gpus all -p 9876:9876 phostt-cuda
 #
 # CUDA binary falls back to CPU if no GPU is available at runtime.
 
@@ -25,54 +25,54 @@ RUN mkdir -p src && \
     echo 'fn main() {}' > src/main.rs && \
     touch src/lib.rs && \
     cargo build --release --features cuda && \
-    rm -rf src target/release/deps/gigastt-* target/release/gigastt*
+    rm -rf src target/release/deps/phostt-* target/release/phostt*
 
 COPY src/ src/
 
 # ort's download-binaries feature fetches CUDA-enabled ONNX Runtime.
 # copy-dylibs copies libonnxruntime*.so to target/release/.
 RUN cargo build --release --features cuda && \
-    strip target/release/gigastt
+    strip target/release/phostt
 
-# --- Model bake stage (runs only when GIGASTT_BAKE_MODEL=1) ---
+# --- Model bake stage (runs only when PHOSTT_BAKE_MODEL=1) ---
 FROM debian:bookworm-slim AS model-fetcher
 
-ARG GIGASTT_BAKE_MODEL=0
+ARG PHOSTT_BAKE_MODEL=0
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /build/target/release/gigastt /usr/local/bin/gigastt
+COPY --from=builder /build/target/release/phostt /usr/local/bin/phostt
 
 RUN mkdir -p /models && \
-    if [ "$GIGASTT_BAKE_MODEL" = "1" ]; then \
-        gigastt download --model-dir /models; \
+    if [ "$PHOSTT_BAKE_MODEL" = "1" ]; then \
+        phostt download --model-dir /models; \
     fi
 
 # --- Runtime stage ---
 FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
 
-ARG GIGASTT_BAKE_MODEL=0
+ARG PHOSTT_BAKE_MODEL=0
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates curl && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy binary AND ort's dynamic libraries (.so files copied by copy-dylibs)
-COPY --from=builder /build/target/release/gigastt /usr/local/bin/gigastt
+COPY --from=builder /build/target/release/phostt /usr/local/bin/phostt
 COPY --from=builder /build/target/release/libonnxruntime*.so* /usr/local/lib/
 RUN ldconfig
 
-RUN groupadd -r gigastt && useradd -r -g gigastt gigastt && \
-    mkdir -p /home/gigastt/.gigastt/models && chown -R gigastt:gigastt /home/gigastt
+RUN groupadd -r phostt && useradd -r -g phostt phostt && \
+    mkdir -p /home/phostt/.phostt/models && chown -R phostt:phostt /home/phostt
 
-# Copy baked model files (only present when GIGASTT_BAKE_MODEL=1)
-COPY --from=model-fetcher --chown=gigastt:gigastt /models/. /home/gigastt/.gigastt/models/
+# Copy baked model files (only present when PHOSTT_BAKE_MODEL=1)
+COPY --from=model-fetcher --chown=phostt:phostt /models/. /home/phostt/.phostt/models/
 
-USER gigastt
+USER phostt
 
-ENV RUST_LOG=gigastt=info
+ENV RUST_LOG=phostt=info
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH}"
 
@@ -81,5 +81,5 @@ EXPOSE 9876
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD curl -f http://localhost:9876/health || exit 1
 
-ENTRYPOINT ["gigastt"]
+ENTRYPOINT ["phostt"]
 CMD ["serve", "--port", "9876", "--host", "0.0.0.0", "--bind-all"]

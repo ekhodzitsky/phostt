@@ -1,4 +1,4 @@
-// WebSocket client for gigastt — streams a WAV file and prints transcription.
+// WebSocket client for phostt — streams a WAV file and prints transcription.
 // Usage: bun examples/bun_client.ts <audio.wav> [ws://host:port]
 
 const WAV_HEADER_BYTES = 44;

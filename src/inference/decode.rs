@@ -1,4 +1,4 @@
-//! RNN-T greedy decoding for GigaAM v3 e2e_rnnt.
+//! RNN-T greedy decoding for Zipformer-vi RNN-T.
 
 use anyhow::{Context, Result};
 use ort::session::Session;

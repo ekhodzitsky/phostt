@@ -141,7 +141,7 @@ pub async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> 
     let _ = &state.engine;
     Json(HealthResponse {
         status: "ok".into(),
-        model: "gigaam-v3-e2e-rnnt".into(),
+        model: "zipformer-vi-rnnt".into(),
         version: env!("CARGO_PKG_VERSION").into(),
     })
 }
@@ -154,8 +154,8 @@ pub async fn models(State(state): State<Arc<AppState>>) -> Json<ModelInfo> {
     #[cfg(not(feature = "diarization"))]
     let diarization = false;
     Json(ModelInfo {
-        id: "gigaam-v3-e2e-rnnt".into(),
-        name: "GigaAM v3 RNN-T".into(),
+        id: "zipformer-vi-rnnt".into(),
+        name: "Zipformer-vi RNN-T".into(),
         version: env!("CARGO_PKG_VERSION").into(),
         encoder: if engine.is_int8() {
             "int8".into()

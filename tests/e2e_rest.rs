@@ -1,6 +1,6 @@
-//! End-to-end REST API tests for the gigastt HTTP server.
+//! End-to-end REST API tests for the phostt HTTP server.
 //!
-//! All tests require the GigaAM model to be downloaded (~850MB).
+//! All tests require the Zipformer-vi model to be downloaded (~850MB).
 //! Run with: `cargo test --test e2e_rest -- --ignored`
 
 mod common;
@@ -36,8 +36,8 @@ async fn test_health_returns_ok() {
         body["model"]
             .as_str()
             .unwrap_or_default()
-            .contains("gigaam"),
-        "model field should contain \"gigaam\", got: {:?}",
+            .contains("zipformer"),
+        "model field should contain \"zipformer\", got: {:?}",
         body["model"]
     );
     assert!(

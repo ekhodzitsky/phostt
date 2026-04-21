@@ -1,14 +1,14 @@
-//! # gigastt
+//! # phostt
 //!
-//! Local speech-to-text powered by GigaAM v3 e2e_rnnt — on-device Russian speech
+//! Local speech-to-text powered by Zipformer-vi RNN-T — on-device Vietnamese speech
 //! recognition via ONNX Runtime. No cloud APIs, no API keys, full privacy.
 //!
 //! ## Quick start
 //!
 //! ```ignore
-//! use gigastt::inference::Engine;
+//! use phostt::inference::Engine;
 //!
-//! let engine = Engine::load("~/.gigastt/models")?;
+//! let engine = Engine::load("~/.phostt/models")?;
 //!
 //! // File transcription
 //! let text = engine.transcribe_file("audio.wav")?;

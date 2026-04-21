@@ -1,4 +1,4 @@
-//! ONNX Runtime inference engine for GigaAM v3 e2e_rnnt.
+//! ONNX Runtime inference engine for Zipformer-vi RNN-T.
 //!
 //! Loads encoder, decoder, and joiner ONNX models and runs the RNN-T streaming decode loop.
 
@@ -318,14 +318,14 @@ pub struct StreamingState {
     pub diarization_state: Option<DiarizationStreamState>,
 }
 
-/// ONNX Runtime inference engine for GigaAM v3 e2e_rnnt.
+/// ONNX Runtime inference engine for Zipformer-vi RNN-T.
 ///
 /// Thread-safe: inference sessions live in a [`SessionPool`] so `Engine` can be
 /// shared across connections via `Arc<Engine>`. The pool size acts as the
 /// concurrency limit — no separate semaphore needed. Typical usage:
 ///
 /// ```ignore
-/// let engine = Engine::load("~/.gigastt/models")?;
+/// let engine = Engine::load("~/.phostt/models")?;
 /// let mut guard = engine.pool.checkout().await?;
 /// let text = engine.transcribe_file("audio.wav", &mut guard)?;
 /// // guard is returned to the pool on drop

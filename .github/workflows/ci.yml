@@ -141,8 +141,8 @@ jobs:
         id: cache-model
         uses: actions/cache@v4
         with:
-          path: ~/.gigastt/models
-          key: gigastt-model-v3-onnx-${{ hashFiles('src/model/mod.rs') }}
+          path: ~/.phostt/models
+          key: phostt-model-v3-onnx-${{ hashFiles('src/model/mod.rs') }}
 
       - name: Download model
         if: steps.cache-model.outputs.cache-hit != 'true'

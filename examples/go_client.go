@@ -1,7 +1,7 @@
-// WebSocket client for gigastt — streams a WAV file and prints transcription.
+// WebSocket client for phostt — streams a WAV file and prints transcription.
 //
 // Setup:
-//   go mod init gigastt-client
+//   go mod init phostt-client
 //   go get github.com/gorilla/websocket
 //
 // Usage:

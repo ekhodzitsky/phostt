@@ -1,6 +1,6 @@
-//! Load tests for the gigastt server.
+//! Load tests for the phostt server.
 //!
-//! All tests require the GigaAM ONNX model to be downloaded (~850MB).
+//! All tests require the Zipformer-vi ONNX model to be downloaded (~850MB).
 //! Run with: `cargo test --test load_test -- --ignored`
 
 mod common;

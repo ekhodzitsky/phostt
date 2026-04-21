@@ -1,4 +1,4 @@
-//! Log-mel spectrogram feature extraction for GigaAM v3.
+//! Log-mel spectrogram feature extraction for Zipformer-vi.
 
 use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};

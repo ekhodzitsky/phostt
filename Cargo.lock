@@ -673,36 +673,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gigastt"
-version = "0.9.4"
-dependencies = [
- "anyhow",
- "async-channel",
- "axum",
- "bytes",
- "clap",
- "dashmap",
- "futures-util",
- "ort",
- "prost 0.13.5",
- "prost-build",
- "reqwest",
- "rubato",
- "rustfft",
- "serde",
- "serde_json",
- "sha2",
- "symphonia",
- "tempfile",
- "tokio",
- "tokio-stream",
- "tokio-tungstenite",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "h2"
 version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1415,6 +1385,36 @@ dependencies = [
  "fixedbitset",
  "hashbrown 0.15.5",
  "indexmap",
+]
+
+[[package]]
+name = "phostt"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "axum",
+ "bytes",
+ "clap",
+ "dashmap",
+ "futures-util",
+ "ort",
+ "prost 0.13.5",
+ "prost-build",
+ "reqwest",
+ "rubato",
+ "rustfft",
+ "serde",
+ "serde_json",
+ "sha2",
+ "symphonia",
+ "tempfile",
+ "tokio",
+ "tokio-stream",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

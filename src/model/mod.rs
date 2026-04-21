@@ -1,6 +1,6 @@
 //! Model download and management.
 //!
-//! Downloads GigaAM v3 e2e_rnnt ONNX files from HuggingFace to `~/.gigastt/models/`.
+//! Downloads Zipformer-vi RNN-T ONNX files from HuggingFace to `~/.phostt/models/`.
 
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
@@ -101,18 +101,18 @@ fn home_dir() -> Option<std::path::PathBuf> {
     }
 }
 
-/// Return the default model directory path (`~/.gigastt/models/`).
+/// Return the default model directory path (`~/.phostt/models/`).
 ///
-/// Falls back to `.gigastt/models` if the home directory cannot be determined.
+/// Falls back to `.phostt/models` if the home directory cannot be determined.
 pub fn default_model_dir() -> String {
     home_dir()
         .map(|h| {
-            h.join(".gigastt")
+            h.join(".phostt")
                 .join("models")
                 .to_string_lossy()
                 .into_owned()
         })
-        .unwrap_or_else(|| ".gigastt/models".into())
+        .unwrap_or_else(|| ".phostt/models".into())
 }
 
 /// Ensure model files exist in `model_dir`, downloading from HuggingFace if missing.
@@ -309,11 +309,11 @@ mod tests {
     }
 
     #[test]
-    fn test_default_model_dir_contains_gigastt() {
+    fn test_default_model_dir_contains_phostt() {
         let dir = default_model_dir();
         assert!(
-            dir.contains(".gigastt"),
-            "default_model_dir() should contain \".gigastt\", got: {dir}"
+            dir.contains(".phostt"),
+            "default_model_dir() should contain \".phostt\", got: {dir}"
         );
     }
 
@@ -355,10 +355,10 @@ mod tests {
 
     #[test]
     fn test_partial_path_appends_suffix() {
-        let p = partial_path(Path::new("/tmp/gigastt/encoder.onnx"));
+        let p = partial_path(Path::new("/tmp/phostt/encoder.onnx"));
         assert_eq!(
             p,
-            std::path::PathBuf::from("/tmp/gigastt/encoder.onnx.partial"),
+            std::path::PathBuf::from("/tmp/phostt/encoder.onnx.partial"),
         );
     }
 
@@ -460,7 +460,7 @@ mod tests {
     fn test_sha256_file_matches_in_memory_hash() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let p = tmp.path().join("blob");
-        let payload = b"gigastt-model-bytes";
+        let payload = b"phostt-model-bytes";
         std::fs::write(&p, payload).unwrap();
 
         let got = sha256_file(&p).expect("sha256_file");

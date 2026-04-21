@@ -42,7 +42,7 @@ pub(crate) const POOL_RETRY_AFTER_SECS: u64 = 30;
 
 /// Origin policy for CORS + cross-origin deny middleware.
 ///
-/// gigastt is a privacy-first local server: by default we deny cross-origin
+/// phostt is a privacy-first local server: by default we deny cross-origin
 /// requests outright so a malicious page cannot trigger transcription from a
 /// logged-in user's microphone via a drive-by WebSocket. Loopback origins
 /// (`localhost`, `127.0.0.1`, `[::1]`) are always permitted; additional origins
@@ -243,11 +243,11 @@ pub async fn run_with_config(
     let metrics_registry = if config.metrics_enabled {
         let reg = std::sync::Arc::new(self::metrics::MetricsRegistry::new());
         reg.register_counter(
-            "gigastt_http_requests_total",
+            "phostt_http_requests_total",
             "Total HTTP requests processed",
         );
         reg.register_histogram(
-            "gigastt_http_request_duration_seconds",
+            "phostt_http_request_duration_seconds",
             "HTTP request duration in seconds",
             self::metrics::DEFAULT_BUCKETS,
         );
@@ -379,7 +379,7 @@ pub async fn run_with_config(
         .layer(origin_layer)
         .with_state(state);
 
-    tracing::info!("gigastt server listening on http://{addr}");
+    tracing::info!("phostt server listening on http://{addr}");
     tracing::info!("  WebSocket: ws://{addr}/v1/ws (legacy alias: ws://{addr}/ws)");
     tracing::info!("  REST API:  http://{addr}/health, /v1/transcribe, /v1/transcribe/stream");
     if config.origin_policy.allow_any {
@@ -452,7 +452,7 @@ pub async fn run_with_config(
 }
 
 /// Instrumentation middleware: records HTTP request counters and a duration
-/// histogram under the `gigastt_http_*` namespace. Takes the whole
+/// histogram under the `phostt_http_*` namespace. Takes the whole
 /// `AppState` so we can reach `metrics_registry` — when the operator did
 /// not pass `--metrics` the registry is `None` and the middleware
 /// degrades to a single `Instant::now()` per request.
@@ -471,7 +471,7 @@ async fn http_metrics_middleware(
     let elapsed = start.elapsed().as_secs_f64();
     let status = response.status().as_u16().to_string();
     registry.counter_inc(
-        "gigastt_http_requests_total",
+        "phostt_http_requests_total",
         vec![
             ("method".into(), method.clone()),
             ("path".into(), path.clone()),
@@ -480,7 +480,7 @@ async fn http_metrics_middleware(
         1,
     );
     registry.histogram_record(
-        "gigastt_http_request_duration_seconds",
+        "phostt_http_request_duration_seconds",
         vec![("method".into(), method), ("path".into(), path)],
         elapsed,
     );
@@ -1008,7 +1008,7 @@ async fn handle_ws_inner(
     let diarization_available = false;
 
     let ready = ServerMessage::Ready {
-        model: "gigaam-v3-e2e-rnnt".into(),
+        model: "zipformer-vi-rnnt".into(),
         sample_rate: DEFAULT_SAMPLE_RATE,
         version: crate::protocol::PROTOCOL_VERSION.into(),
         supported_rates: SUPPORTED_RATES.to_vec(),

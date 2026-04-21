@@ -278,11 +278,11 @@ mod tests {
     fn registry() -> MetricsRegistry {
         let r = MetricsRegistry::new();
         r.register_counter(
-            "gigastt_http_requests_total",
+            "phostt_http_requests_total",
             "Total HTTP requests processed",
         );
         r.register_histogram(
-            "gigastt_http_request_duration_seconds",
+            "phostt_http_request_duration_seconds",
             "HTTP request duration",
             DEFAULT_BUCKETS,
         );
@@ -299,7 +299,7 @@ mod tests {
     fn test_counter_increment_and_render() {
         let r = registry();
         r.counter_inc(
-            "gigastt_http_requests_total",
+            "phostt_http_requests_total",
             vec![
                 ("method".into(), "GET".into()),
                 ("path".into(), "/health".into()),
@@ -308,7 +308,7 @@ mod tests {
             1,
         );
         r.counter_inc(
-            "gigastt_http_requests_total",
+            "phostt_http_requests_total",
             vec![
                 ("method".into(), "GET".into()),
                 ("path".into(), "/health".into()),
@@ -317,10 +317,10 @@ mod tests {
             2,
         );
         let text = r.render_prometheus();
-        assert!(text.contains("# HELP gigastt_http_requests_total Total HTTP requests processed"));
-        assert!(text.contains("# TYPE gigastt_http_requests_total counter"));
+        assert!(text.contains("# HELP phostt_http_requests_total Total HTTP requests processed"));
+        assert!(text.contains("# TYPE phostt_http_requests_total counter"));
         assert!(text.contains(
-            "gigastt_http_requests_total{method=\"GET\",path=\"/health\",status=\"200\"} 3"
+            "phostt_http_requests_total{method=\"GET\",path=\"/health\",status=\"200\"} 3"
         ));
     }
 
@@ -329,7 +329,7 @@ mod tests {
         let r = registry();
         let labels = vec![("method".into(), "GET".into())];
         for v in [0.001, 0.03, 0.3, 1.5] {
-            r.histogram_record("gigastt_http_request_duration_seconds", labels.clone(), v);
+            r.histogram_record("phostt_http_request_duration_seconds", labels.clone(), v);
         }
         let text = r.render_prometheus();
         // 0.001 ≤ 0.005 → contributes to every bucket including 0.005+
@@ -337,20 +337,20 @@ mod tests {
         // 0.3   ≤ 0.5   → contributes to 0.5, 1.0, 2.5, 5.0, 10.0
         // 1.5   ≤ 2.5   → contributes to 2.5, 5.0, 10.0
         assert!(text.contains(
-            "gigastt_http_request_duration_seconds_bucket{method=\"GET\",le=\"0.005\"} 1"
+            "phostt_http_request_duration_seconds_bucket{method=\"GET\",le=\"0.005\"} 1"
         ));
         assert!(text.contains(
-            "gigastt_http_request_duration_seconds_bucket{method=\"GET\",le=\"0.05\"} 2"
+            "phostt_http_request_duration_seconds_bucket{method=\"GET\",le=\"0.05\"} 2"
         ));
         assert!(
             text.contains(
-                "gigastt_http_request_duration_seconds_bucket{method=\"GET\",le=\"0.5\"} 3"
+                "phostt_http_request_duration_seconds_bucket{method=\"GET\",le=\"0.5\"} 3"
             )
         );
         assert!(text.contains(
-            "gigastt_http_request_duration_seconds_bucket{method=\"GET\",le=\"+Inf\"} 4"
+            "phostt_http_request_duration_seconds_bucket{method=\"GET\",le=\"+Inf\"} 4"
         ));
-        assert!(text.contains("gigastt_http_request_duration_seconds_count{method=\"GET\"} 4"));
+        assert!(text.contains("phostt_http_request_duration_seconds_count{method=\"GET\"} 4"));
     }
 
     #[test]

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WebSocket client for gigastt — streams a WAV file and prints transcription."""
+"""WebSocket client for phostt — streams a WAV file and prints transcription."""
 
 import asyncio
 import json

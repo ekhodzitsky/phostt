@@ -1,4 +1,4 @@
-//! End-to-end error-path tests for the gigastt server.
+//! End-to-end error-path tests for the phostt server.
 //!
 //! All tests except `test_ws_idle_timeout` require the ONNX model.
 //! Run with: `cargo test --test e2e_errors -- --ignored`

@@ -1,11 +1,11 @@
 [package]
-name = "gigastt"
-version = "0.9.4"
+name = "phostt"
+version = "0.1.0"
 edition = "2024"
-description = "Local STT server powered by GigaAM v3 e2e_rnnt — on-device Russian speech recognition via ONNX Runtime"
+description = "Local STT server powered by Zipformer-vi RNN-T — on-device Vietnamese speech recognition via ONNX Runtime"
 license = "MIT"
-repository = "https://github.com/ekhodzitsky/gigastt"
-keywords = ["stt", "speech-recognition", "gigaam", "onnx", "russian"]
+repository = "https://github.com/ekhodzitsky/phostt"
+keywords = ["stt", "speech-recognition", "zipformer", "onnx", "vietnamese"]
 categories = ["multimedia::audio", "command-line-utilities"]
 
 [features]
@@ -13,10 +13,9 @@ default = []
 coreml = ["ort/coreml"]
 cuda = ["ort/cuda"]
 diarization = []
-# `quantize` used to gate the INT8 quantization pipeline. It is now always
-# compiled in (the user's core workflow is: download → quantize → serve),
-# so the feature is retained as a no-op for backwards compatibility with
-# `cargo install gigastt --features quantize`.
+# `quantize` retained as a no-op feature flag — phostt ships pre-quantized
+# Zipformer-vi INT8 weights from upstream sherpa-onnx, so no in-tree
+# quantization step is required on the user's hot path.
 quantize = []
 
 [dependencies]
@@ -62,7 +61,7 @@ rubato = "0.16"
 # Async stream adapters (ReceiverStream for SSE)
 tokio-stream = "0.1"
 
-# Cancellation + task tracking for graceful WS/SSE drain on shutdown (V1-03).
+# Cancellation + task tracking for graceful WS/SSE drain on shutdown.
 # `rt` pulls in `CancellationToken` + `TaskTracker` (tokio-util 0.7).
 tokio-util = { version = "0.7", features = ["rt"] }
 
@@ -74,28 +73,20 @@ symphonia = { version = "0.5", features = ["aac", "isomp4", "mp3", "ogg", "flac"
 # the dependency direct so the zero-copy decode contract is discoverable.
 bytes = "1"
 
-# Per-IP rate limiting (token bucket, optional — off by default). Implemented
-# in `src/server/rate_limit.rs`; `dashmap` gives lock-free reads on the common
-# path. Previously this was `tower_governor = "0.7"`, which pulled
-# `governor` + `forwarded-header-value` + `quanta` transitively.
+# Per-IP rate limiting (token bucket, optional — off by default).
+# Implemented in `src/server/rate_limit.rs`; `dashmap` gives lock-free reads.
 dashmap = "6"
 
-# Prometheus-compatible metrics (exposed behind `--metrics` flag, off by default)
-
-
-# ONNX protobuf types for the native INT8 quantization pipeline
-# (`src/quantize.rs`). Vendored `.proto` + `prost-build` (build-dep) replaces
-# the unmaintained `onnx-pb 0.1.4` crate and unblocks `RUSTSEC-2021-0073`.
+# ONNX protobuf types for the legacy in-tree quantization pipeline
+# (`src/quantize.rs`). Kept available for downstream re-quantization
+# experiments even though phostt's hot path uses pre-quantized upstream
+# weights.
 prost = "0.13"
 
 [build-dependencies]
 # Regenerates ONNX types from `proto/onnx.proto` into `OUT_DIR/onnx.rs`
 # at build time. Requires `protoc` in `PATH` (see `build.rs`).
 prost-build = "0.14"
-
-[[test]]
-name = "benchmark"
-harness = false
 
 [dev-dependencies]
 tempfile = "3"

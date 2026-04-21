@@ -1,11 +1,11 @@
-//! Soak test for the gigastt WebSocket server.
+//! Soak test for the phostt WebSocket server.
 //!
 //! Cycles connect→stream→stop→disconnect repeatedly for a configurable duration
 //! to surface memory leaks, resource exhaustion, or connection handling bugs.
 //!
 //! Marked `#[ignore]` — run locally only:
 //! ```
-//! GIGASTT_SOAK_DURATION_SECS=60 cargo test --test soak_test -- --ignored
+//! PHOSTT_SOAK_DURATION_SECS=60 cargo test --test soak_test -- --ignored
 //! ```
 
 mod common;
@@ -16,7 +16,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 /// Cycle connect→stream 2s silence→stop→disconnect for a configurable duration.
 ///
-/// Environment variable `GIGASTT_SOAK_DURATION_SECS` controls how long to run
+/// Environment variable `PHOSTT_SOAK_DURATION_SECS` controls how long to run
 /// (default: 600 seconds / 10 minutes).
 ///
 /// Each iteration failure increments `error_count` but does not abort the loop.
@@ -24,7 +24,7 @@ use tokio_tungstenite::tungstenite::Message;
 #[tokio::test]
 #[ignore] // Requires model download; run locally only
 async fn test_soak_ws_continuous() {
-    let soak_duration_secs: u64 = std::env::var("GIGASTT_SOAK_DURATION_SECS")
+    let soak_duration_secs: u64 = std::env::var("PHOSTT_SOAK_DURATION_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(600);

@@ -27,7 +27,7 @@ pub fn home_dir() -> Option<PathBuf> {
 pub fn model_dir() -> String {
     let dir = home_dir()
         .expect("Cannot determine home directory")
-        .join(".gigastt")
+        .join(".phostt")
         .join("models");
     assert!(
         dir.join("v3_e2e_rnnt_encoder.onnx").exists(),
@@ -53,8 +53,8 @@ pub async fn start_server(model_dir: &str) -> (u16, oneshot::Sender<()>) {
     let port = free_port().await;
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
-    let engine = gigastt::inference::Engine::load(model_dir).unwrap();
-    tokio::spawn(gigastt::server::run_with_shutdown(
+    let engine = phostt::inference::Engine::load(model_dir).unwrap();
+    tokio::spawn(phostt::server::run_with_shutdown(
         engine,
         port,
         "127.0.0.1",
@@ -69,20 +69,20 @@ pub async fn start_server(model_dir: &str) -> (u16, oneshot::Sender<()>) {
 /// e2e tests that need a short drain window or session cap.
 pub async fn start_server_with_limits(
     model_dir: &str,
-    limits: gigastt::server::RuntimeLimits,
+    limits: phostt::server::RuntimeLimits,
 ) -> (u16, oneshot::Sender<()>) {
     let port = free_port().await;
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
-    let engine = gigastt::inference::Engine::load(model_dir).unwrap();
-    let config = gigastt::server::ServerConfig {
+    let engine = phostt::inference::Engine::load(model_dir).unwrap();
+    let config = phostt::server::ServerConfig {
         port,
         host: "127.0.0.1".into(),
-        origin_policy: gigastt::server::OriginPolicy::loopback_only(),
+        origin_policy: phostt::server::OriginPolicy::loopback_only(),
         limits,
         metrics_enabled: false,
     };
-    tokio::spawn(gigastt::server::run_with_config(
+    tokio::spawn(phostt::server::run_with_config(
         engine,
         config,
         Some(shutdown_rx),
