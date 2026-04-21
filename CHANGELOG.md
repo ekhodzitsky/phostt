@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+## [0.2.0] - 2026-04-21
+
+### Added
+
 - FFI layer for Android (`src/ffi.rs`): C-ABI exposing `phostt_engine_new`,
   `phostt_transcribe_file`, `phostt_string_free`, `phostt_engine_free`.
 - Kotlin JNI bridge skeleton (`ffi/android/PhosttBridge.kt`).
@@ -38,8 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
-- No-op `quantize` feature flag already removed from `Cargo.toml` (Zipformer-vi
-  ships pre-quantized; in-tree quantizer was dead weight).
+- No-op `quantize` feature flag removed from `Cargo.toml` (Zipformer-vi ships
+  pre-quantized; in-tree quantizer was dead weight).
 
 ## [0.1.0] - YYYY-MM-DD
 
