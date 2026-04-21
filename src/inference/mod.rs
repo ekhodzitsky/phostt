@@ -1017,10 +1017,6 @@ impl Engine {
 
     /// Convert decoded tokens into words with timestamps and confidence.
     fn tokens_to_words(&self, tokens: &[decode::TokenInfo], frame_offset: usize) -> Vec<WordInfo> {
-        if tokens.is_empty() {
-            return Vec::new();
-        }
-
         // Fast path for the no-speech frame case. The word-boundary loop
         // below would also return `Vec::new()` on an empty input, but
         // bailing early skips the allocation of the intermediate state.

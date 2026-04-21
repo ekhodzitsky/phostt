@@ -210,11 +210,21 @@ fn partial_path(final_path: &Path) -> std::path::PathBuf {
 }
 
 /// Compute SHA-256 for a file synchronously, returning the lowercase hex digest.
+/// Uses a buffered reader to avoid loading the entire file into memory.
 fn sha256_file(path: &Path) -> Result<String> {
-    let data = std::fs::read(path)
-        .with_context(|| format!("Failed to read file for verification: {}", path.display()))?;
+    use std::io::Read;
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("Failed to open file for verification: {}", path.display()))?;
+    let mut reader = std::io::BufReader::new(file);
     let mut hasher = Sha256::new();
-    hasher.update(&data);
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = reader.read(&mut buf).context("Read error during SHA-256")?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
     Ok(format!("{:x}", hasher.finalize()))
 }
 
