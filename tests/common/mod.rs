@@ -37,6 +37,28 @@ pub fn model_dir() -> String {
     dir.to_string_lossy().into_owned()
 }
 
+/// Return model directory after also verifying test WAV fixtures exist.
+pub fn test_wavs_dir() -> String {
+    let dir = model_dir();
+    let test_wavs = std::path::Path::new(&dir).join("test_wavs");
+    for n in 0..=2 {
+        let path = test_wavs.join(format!("{n}.wav"));
+        assert!(
+            path.exists(),
+            "Test WAV not found at {}. The model bundle should include test_wavs/.",
+            path.display()
+        );
+    }
+    dir
+}
+
+/// Return the path to a specific test WAV file from the model bundle.
+pub fn test_wav_path(n: usize) -> PathBuf {
+    PathBuf::from(test_wavs_dir())
+        .join("test_wavs")
+        .join(format!("{n}.wav"))
+}
+
 /// Find a free TCP port by binding to port 0.
 pub async fn free_port() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -160,6 +182,23 @@ pub fn generate_pcm16_tone(duration_s: f32, sample_rate: u32, freq_hz: f32) -> V
         let t = i as f32 / sample_rate as f32;
         let sample = (freq_hz * t * 2.0 * std::f32::consts::PI).sin() * (i16::MAX as f32 * 0.2);
         bytes.extend_from_slice(&(sample as i16).to_le_bytes());
+    }
+    bytes
+}
+
+/// Read a WAV file and return raw PCM16 LE bytes suitable for WebSocket binary frames.
+///
+/// Uses `phostt::inference::audio::decode_audio_file` to decode any supported format
+/// to mono f32 at 16kHz, then converts to i16 and packs into little-endian bytes.
+pub fn pcm16_from_wav(path: &std::path::Path) -> Vec<u8> {
+    let float_samples = phostt::inference::audio::decode_audio_file(path.to_str().unwrap())
+        .expect("Failed to decode WAV file");
+
+    let mut bytes = Vec::with_capacity(float_samples.len() * 2);
+    for sample in float_samples {
+        let clipped = sample.clamp(-1.0, 1.0);
+        let i16_sample = (clipped * i16::MAX as f32) as i16;
+        bytes.extend_from_slice(&i16_sample.to_le_bytes());
     }
     bytes
 }

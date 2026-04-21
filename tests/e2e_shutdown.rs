@@ -166,7 +166,54 @@ async fn test_shutdown_ws_emits_final_and_close() {
 }
 
 // ---------------------------------------------------------------------------
-// 4. V1-03: SSE stream terminates cleanly within the drain window
+// 4. Drain semantics with default shutdown_drain_secs and real audio
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore] // Requires model download
+async fn test_shutdown_drain_with_real_audio() {
+    let model_dir = common::model_dir();
+    // Default limits: shutdown_drain_secs = 10 s.
+    let (port, shutdown) = common::start_server(&model_dir).await;
+
+    let (mut sink, mut stream, _ready) = common::ws_connect(port).await;
+
+    // Send 1 second of 440 Hz tone at 48 kHz so the encoder has real work.
+    let tone = common::generate_pcm16_tone(1.0, 48000, 440.0);
+    sink.send(Message::Binary(tone.into())).await.unwrap();
+
+    // Give the server a moment to enter the inference loop.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let _ = shutdown.send(());
+
+    let mut saw_final = false;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+
+    while tokio::time::Instant::now() < deadline {
+        let next = tokio::time::timeout(Duration::from_secs(5), stream.next()).await;
+        match next {
+            Ok(Some(Ok(Message::Text(text)))) => {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text)
+                    && v["type"] == "final"
+                {
+                    saw_final = true;
+                }
+            }
+            Ok(Some(Ok(Message::Close(_)))) | Ok(None) | Ok(Some(Err(_))) => break,
+            Err(_) => break,
+            _ => continue,
+        }
+    }
+
+    assert!(
+        saw_final,
+        "Shutdown drain must emit a Final frame before the socket closes"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 5. V1-03: SSE stream terminates cleanly within the drain window
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -222,7 +269,7 @@ async fn test_shutdown_sse_stream_terminates_cleanly() {
 }
 
 // ---------------------------------------------------------------------------
-// 5. V1-04: session duration cap fires even for a silence-streaming client
+// 6. V1-04: session duration cap fires even for a silence-streaming client
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -306,7 +353,7 @@ async fn test_max_session_duration_cap() {
 }
 
 // ---------------------------------------------------------------------------
-// 6. V1-07 + V1-21: shutdown while pool is saturated returns 503, not 500
+// 7. V1-07 + V1-21: shutdown while pool is saturated returns 503, not 500
 // ---------------------------------------------------------------------------
 
 /// Pool saturation + shutdown: occupy every triplet with a long-running REST

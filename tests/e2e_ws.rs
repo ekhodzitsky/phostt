@@ -60,9 +60,9 @@ async fn test_ws_audio_produces_final() {
 
     let (mut sink, mut stream, _ready) = common::ws_connect(port).await;
 
-    // 2 seconds of PCM16 silence at 48kHz = 192000 bytes
-    let silence = common::generate_pcm16_silence(2.0, 48000);
-    for chunk in silence.chunks(9600) {
+    // Stream real Vietnamese audio from the model bundle
+    let audio = common::pcm16_from_wav(&common::test_wav_path(0));
+    for chunk in audio.chunks(9600) {
         sink.send(Message::Binary(chunk.to_vec().into()))
             .await
             .unwrap();
@@ -90,9 +90,12 @@ async fn test_ws_audio_produces_final() {
         match v["type"].as_str().unwrap_or("") {
             "partial" => continue,
             "final" => {
+                let text_str = v["text"]
+                    .as_str()
+                    .expect("Final message should have a text field");
                 assert!(
-                    v["text"].is_string(),
-                    "Final message should have a text field"
+                    !text_str.trim().is_empty(),
+                    "Expected non-empty Vietnamese transcription, got: {text_str}"
                 );
                 break;
             }
@@ -156,9 +159,11 @@ async fn test_ws_configure_valid_sample_rate() {
     .await
     .unwrap();
 
-    // 1 second of PCM16 silence at 16kHz = 32000 bytes
-    let silence = common::generate_pcm16_silence(1.0, 16000);
-    sink.send(Message::Binary(silence.into())).await.unwrap();
+    // Stream ~1 second of real Vietnamese audio at 16kHz (PCM16 LE)
+    let audio = common::pcm16_from_wav(&common::test_wav_path(0));
+    let one_sec_bytes = 16000usize * 2; // 1 second at 16kHz
+    let chunk = &audio[..audio.len().min(one_sec_bytes)];
+    sink.send(Message::Binary(chunk.to_vec().into())).await.unwrap();
 
     // Send Stop
     sink.send(Message::Text(

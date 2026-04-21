@@ -45,9 +45,9 @@ The Zipformer-vi-30M weights ship via [sherpa-onnx releases](https://github.com/
 trained on ~6000 hours of Vietnamese speech, ICASSP-published WER on the
 VLSP and GigaSpeech2 benchmarks).
 
-## Planned features
+## Features
 
-- **Real-time streaming** — partial transcription via WebSocket as you speak
+- **Real-time streaming** — partial transcription via WebSocket as you speak ✅
 - **REST API + SSE** — file transcription with instant or streaming response
 - **Hardware acceleration** — CoreML + Neural Engine (macOS), CUDA 12+ (Linux), CPU everywhere
 - **Pre-quantized INT8** — encoder ships at ~75 MB INT8 from upstream
@@ -67,6 +67,24 @@ cargo run --release -- serve
 
 The Zipformer-vi ONNX bundle (~75 MB) downloads automatically on first run
 into `~/.phostt/models/`.
+
+### Smoke test
+
+With the server running (or using the `transcribe` command directly):
+
+```sh
+phostt transcribe tests/fixtures/vi_sample.wav
+```
+
+Expected output (approximate — exact text depends on the test utterance):
+
+```
+xin chào
+```
+
+> **Latency note:** Debug build: ~50 ms total on 3.7 s of audio on M1.
+> This is approximate and will vary by hardware and build profile.
+> Release builds with LTO are significantly faster.
 
 ### Docker
 

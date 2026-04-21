@@ -25,6 +25,8 @@ use std::path::Path;
 use crate::error::GigasttError;
 
 use features::MelSpectrogram;
+use kaldi_native_fbank::fbank::FbankComputer;
+use kaldi_native_fbank::online::{FeatureComputer, OnlineFeature};
 use tokenizer::Tokenizer;
 
 /// Number of mel frequency bins used for spectrogram features.
@@ -59,6 +61,15 @@ pub(crate) fn now_timestamp() -> f64 {
 
 /// Seconds per encoder frame (HOP_LENGTH * 4 / 16000 = 0.04s).
 const SECONDS_PER_FRAME: f64 = (HOP_LENGTH as f64) * 4.0 / 16000.0;
+
+/// Streaming window size in mel frames (4 seconds).
+const STREAMING_WINDOW_FRAMES: usize = 400;
+/// Overlap between consecutive streaming windows in mel frames (1 second).
+const STREAMING_OVERLAP_FRAMES: usize = 100;
+/// Shift between window starts in mel frames.
+const STREAMING_SHIFT_FRAMES: usize = STREAMING_WINDOW_FRAMES - STREAMING_OVERLAP_FRAMES;
+/// Shift between window starts in encoder frames (subsampling-by-4).
+const STREAMING_SHIFT_ENCODER_FRAMES: usize = STREAMING_SHIFT_FRAMES / 4;
 
 /// Default number of session triplets in the pool.
 const DEFAULT_POOL_SIZE: usize = 4;
@@ -324,16 +335,22 @@ pub struct DiarizationStreamState {
 /// [`Engine::flush_state`] when the stream ends.
 #[non_exhaustive]
 pub struct StreamingState {
-    /// Decoder LSTM hidden state (persisted across chunks).
+    /// Decoder state (persisted across chunks).
     pub decoder: DecoderState,
-    /// Leftover audio samples that didn't fill a complete frame.
-    pub audio_buffer: Vec<f32>,
+    /// Online FBANK feature extractor.
+    pub online: OnlineFeature,
+    /// Number of mel frames already consumed from `online`.
+    pub frames_seen: usize,
     /// Accumulated transcript text across chunks (reset on endpointing).
     pub accumulated_text: String,
     /// Accumulated words with timestamps (reset on endpointing).
     pub accumulated_words: Vec<WordInfo>,
-    /// Total encoder frames processed so far (for absolute timestamp offset).
+    /// Absolute encoder frame offset for the next window (after subsampling-by-4).
     pub total_frames: usize,
+    /// Mel feature frames waiting to fill the next streaming window.
+    pub feature_window: Vec<f32>,
+    /// Words from the previous window, used for overlap merging.
+    pub prev_window_words: Vec<WordInfo>,
     /// Diarization state (present only when diarization is enabled).
     #[cfg(feature = "diarization")]
     pub diarization_state: Option<DiarizationStreamState>,
@@ -611,12 +628,19 @@ impl Engine {
             );
         }
 
+        let computer = FbankComputer::new(features::phostt_fbank_options())
+            .expect("FBANK options valid");
+        let online = OnlineFeature::new(FeatureComputer::Fbank(computer));
+
         StreamingState {
             decoder: DecoderState::new(self.tokenizer.blank_id()),
-            audio_buffer: Vec::new(),
+            online,
+            frames_seen: 0,
             accumulated_text: String::new(),
             accumulated_words: Vec::new(),
             total_frames: 0,
+            feature_window: Vec::new(),
+            prev_window_words: Vec::new(),
             #[cfg(feature = "diarization")]
             diarization_state,
         }
@@ -651,33 +675,44 @@ impl Engine {
             None
         };
 
-        let samples = match audio::prepare_audio_buffer(samples, &mut state.audio_buffer) {
-            Some(s) => s,
-            None => return Ok(vec![]),
-        };
-        let samples = &samples[..];
+        state.online.accept_waveform(16000.0, samples);
 
-        let mel_start = std::time::Instant::now();
-        let (features, num_frames) = self.mel.compute(samples);
-        tracing::debug!(
-            elapsed_us = mel_start.elapsed().as_micros() as u64,
-            "mel_compute"
-        );
-        if num_frames == 0 {
+        let ready = state.online.num_frames_ready();
+        let new_frames = ready.saturating_sub(state.frames_seen);
+        if new_frames == 0 {
             return Ok(vec![]);
         }
 
-        #[cfg_attr(not(feature = "diarization"), allow(unused_mut))]
-        let (mut new_words, endpoint) = self
-            .run_inference(
-                triplet,
-                &features,
-                num_frames,
-                &mut state.decoder,
-                state.total_frames,
-            )
-            .map_err(|e| GigasttError::Inference(format!("{e:#}")))?;
-        state.total_frames += num_frames;
+        let new_features = features::extract_online_frames(&state.online, state.frames_seen, new_frames);
+        state.frames_seen = ready;
+        state.feature_window.extend_from_slice(&new_features);
+
+        let mut emitted_words: Vec<WordInfo> = Vec::new();
+        let mut endpoint = false;
+
+        while state.feature_window.len() / N_MELS >= STREAMING_WINDOW_FRAMES {
+            let num_frames = STREAMING_WINDOW_FRAMES;
+            let features = &state.feature_window[..num_frames * N_MELS];
+            let frame_offset = state.total_frames;
+
+            let (window_words, window_endpoint, _enc_len) = self
+                .run_inference(triplet, features, num_frames, &mut state.decoder, frame_offset)
+                .map_err(|e| GigasttError::Inference(format!("{e:#}")))?;
+
+            let delta = Self::delta_words(&window_words, &state.prev_window_words);
+            emitted_words.extend(delta);
+            state.prev_window_words = window_words;
+
+            // Shift window, keeping overlap
+            let shift = STREAMING_SHIFT_FRAMES * N_MELS;
+            state.feature_window.drain(..shift);
+            state.total_frames += STREAMING_SHIFT_ENCODER_FRAMES;
+
+            if window_endpoint {
+                endpoint = true;
+                break;
+            }
+        }
 
         // --- Diarization: accumulate audio, extract embeddings, assign speakers ---
         #[cfg(feature = "diarization")]
@@ -706,24 +741,24 @@ impl Engine {
 
             // Annotate all words in this chunk with current speaker
             if let Some(speaker_id) = dia.current_speaker {
-                for w in &mut new_words {
+                for w in &mut emitted_words {
                     w.speaker = Some(speaker_id);
                 }
             }
         }
 
-        if new_words.is_empty() && !endpoint {
+        if emitted_words.is_empty() && !endpoint {
             return Ok(vec![]);
         }
 
         // Accumulate new words
-        for w in &new_words {
+        for w in &emitted_words {
             if !state.accumulated_text.is_empty() {
                 state.accumulated_text.push(' ');
             }
             state.accumulated_text.push_str(&w.word);
         }
-        state.accumulated_words.extend(new_words);
+        state.accumulated_words.extend(emitted_words);
 
         let text = state.accumulated_text.clone();
         let words = state.accumulated_words.clone();
@@ -734,6 +769,7 @@ impl Engine {
             state.accumulated_text.clear();
             state.accumulated_words.clear();
             state.decoder.consecutive_blanks = 0;
+            state.prev_window_words.clear();
             Ok(vec![TranscriptSegment {
                 text,
                 words,
@@ -752,7 +788,41 @@ impl Engine {
     }
 
     /// Flush accumulated text as a Final segment (called on Stop/Close).
-    pub fn flush_state(&self, state: &mut StreamingState) -> Option<TranscriptSegment> {
+    pub fn flush_state(
+        &self,
+        state: &mut StreamingState,
+        triplet: &mut SessionTriplet,
+    ) -> Option<TranscriptSegment> {
+        state.online.input_finished();
+        let ready = state.online.num_frames_ready();
+        let new_frames = ready.saturating_sub(state.frames_seen);
+        if new_frames > 0 {
+            let new_features =
+                features::extract_online_frames(&state.online, state.frames_seen, new_frames);
+            state.feature_window.extend_from_slice(&new_features);
+            state.frames_seen = ready;
+        }
+
+        if !state.feature_window.is_empty() {
+            let num_frames = state.feature_window.len() / N_MELS;
+            let features = &state.feature_window[..];
+            let frame_offset = state.total_frames;
+            let (window_words, _endpoint, _enc_len) = self
+                .run_inference(triplet, features, num_frames, &mut state.decoder, frame_offset)
+                .ok()?;
+            let delta = Self::delta_words(&window_words, &state.prev_window_words);
+            for w in &delta {
+                if !state.accumulated_text.is_empty() {
+                    state.accumulated_text.push(' ');
+                }
+                state.accumulated_text.push_str(&w.word);
+            }
+            state.accumulated_words.extend(delta);
+            state.prev_window_words = window_words;
+            state.feature_window.clear();
+            state.total_frames += num_frames / 4;
+        }
+
         if state.accumulated_text.is_empty() {
             return None;
         }
@@ -829,7 +899,7 @@ impl Engine {
         tracing::info!("Extracted {} mel frames", num_frames);
 
         let mut decoder_state = DecoderState::new(self.tokenizer.blank_id());
-        let (words, _endpoint) = self
+        let (words, _endpoint, _enc_len) = self
             .run_inference(triplet, &features, num_frames, &mut decoder_state, 0)
             .map_err(|e| GigasttError::Inference(format!("{e:#}")))?;
         let text: String = words
@@ -851,7 +921,7 @@ impl Engine {
         num_frames: usize,
         decoder_state: &mut DecoderState,
         frame_offset: usize,
-    ) -> anyhow::Result<(Vec<WordInfo>, bool)> {
+    ) -> anyhow::Result<(Vec<WordInfo>, bool, usize)> {
         // Zipformer encoder input: features [1, T, N_MELS] (frames-first)
         // + features_length [1] int64. Output: encoder_out [1, T', 512]
         // (Zipformer subsamples by 4) + encoder_out_lens [1] int64.
@@ -915,7 +985,7 @@ impl Engine {
             result.tokens.len()
         );
 
-        Ok((words, result.endpoint_detected))
+        Ok((words, result.endpoint_detected, enc_len))
     }
 
     /// Convert decoded tokens into words with timestamps and confidence.
@@ -990,6 +1060,29 @@ impl Engine {
         }
 
         words
+    }
+
+    /// Return the words from `new` that are not already present in `prev`,
+    /// using a simple suffix/prefix overlap merge.
+    fn delta_words(new: &[WordInfo], prev: &[WordInfo]) -> Vec<WordInfo> {
+        if prev.is_empty() {
+            return new.to_vec();
+        }
+        let mut best = 0;
+        for start in 0..prev.len() {
+            let mut matched = 0;
+            for (a, b) in new.iter().zip(prev[start..].iter()) {
+                if a.word == b.word {
+                    matched += 1;
+                } else {
+                    break;
+                }
+            }
+            if matched > best {
+                best = matched;
+            }
+        }
+        new[best..].to_vec()
     }
 }
 
@@ -1172,5 +1265,62 @@ mod tests {
         let pool = Pool::<u32>::new(vec![]);
         pool.close();
         pool.close();
+    }
+
+    #[tokio::test]
+    async fn test_streaming_matches_offline() {
+        // Skip if model is not downloaded.
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+        let model_dir = home.as_ref().map(|p| p.join(".phostt/models"));
+        if model_dir.is_none() || !model_dir.as_ref().unwrap().join("encoder.int8.onnx").exists() {
+            eprintln!("Skipping test_streaming_matches_offline: model not found");
+            return;
+        }
+        let model_dir = model_dir.unwrap();
+        let engine = Engine::load(model_dir.to_str().unwrap()).unwrap();
+        let wav_path = model_dir.join("test_wavs").join("0.wav");
+        if !wav_path.exists() {
+            eprintln!("Skipping test_streaming_matches_offline: test WAV not found");
+            return;
+        }
+        let samples = audio::decode_audio_file(wav_path.to_str().unwrap()).unwrap();
+
+        let mut triplet = engine.pool.checkout().await.unwrap();
+        let offline = engine.transcribe_samples(&samples, &mut triplet).unwrap();
+        let offline_text = offline.text;
+
+        let mut state = engine.create_state(false);
+        let chunk_size = samples.len() / 3;
+        let chunks = vec![
+            &samples[..chunk_size],
+            &samples[chunk_size..2 * chunk_size],
+            &samples[2 * chunk_size..],
+        ];
+
+        let mut streaming_text = String::new();
+        for chunk in chunks {
+            let segs = engine.process_chunk(chunk, &mut state, &mut triplet).unwrap();
+            for seg in segs {
+                if seg.is_final {
+                    if !streaming_text.is_empty() {
+                        streaming_text.push(' ');
+                    }
+                    streaming_text.push_str(&seg.text);
+                }
+            }
+        }
+        if let Some(flush) = engine.flush_state(&mut state, &mut triplet) {
+            if !streaming_text.is_empty() {
+                streaming_text.push(' ');
+            }
+            streaming_text.push_str(&flush.text);
+        }
+
+        let normalize = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert_eq!(
+            normalize(&streaming_text),
+            normalize(&offline_text),
+            "streaming transcript should match offline transcript"
+        );
     }
 }

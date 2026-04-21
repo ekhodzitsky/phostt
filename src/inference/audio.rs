@@ -11,6 +11,7 @@ use symphonia::core::probe::Hint;
 
 use super::{HOP_LENGTH, N_FFT};
 
+#[allow(dead_code)]
 const MAX_BUFFER_SAMPLES: usize = 16000 * 5; // 5 seconds at 16kHz
 const MAX_DURATION_S: f64 = 600.0; // 10 minutes
 
@@ -308,6 +309,7 @@ pub fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Result<Vec<f32
 /// Returns `Some(usable_samples)` if enough data for at least one frame,
 /// `None` if all data was buffered for the next call.
 /// Updates `buffer` in-place with leftover samples.
+#[allow(dead_code)]
 pub(crate) fn prepare_audio_buffer(new_samples: &[f32], buffer: &mut Vec<f32>) -> Option<Vec<f32>> {
     let mut all_samples = std::mem::take(buffer);
     all_samples.extend_from_slice(new_samples);

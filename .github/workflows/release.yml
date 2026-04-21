@@ -37,6 +37,18 @@ jobs:
             features: ""
             asset_suffix: x86_64-unknown-linux-gnu
             cuda: false
+          - name: linux-aarch64
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            features: ""
+            asset_suffix: aarch64-unknown-linux-gnu
+            cuda: false
+          - name: macos-x86_64
+            os: macos-13
+            target: x86_64-apple-darwin
+            features: coreml
+            asset_suffix: x86_64-apple-darwin
+            cuda: false
           # linux-x86_64-cuda is intentionally omitted until the CUDA install
           # path is stabilized (Jimver/cuda-toolkit breaks on ubuntu-latest for
           # 12.4.x package names). Tracked in specs/todo.md.
@@ -61,6 +73,14 @@ jobs:
       # `build.rs` invokes `prost-build` which shells out to `protoc`.
       # Both GitHub-hosted macos and ubuntu images need it installed
       # explicitly; the `arduino/setup-protoc` action handles both.
+      - name: Install cross-compiler (Linux aarch64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+
       - name: Install protoc
         uses: arduino/setup-protoc@v3
         with:

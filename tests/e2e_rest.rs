@@ -13,7 +13,7 @@ use std::time::Duration;
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore]
+#[ignore = "Requires model download"]
 async fn test_health_returns_ok() {
     let (port, shutdown) = common::start_server(&common::model_dir()).await;
 
@@ -53,10 +53,13 @@ async fn test_health_returns_ok() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore]
+#[ignore = "Requires model download (includes test_wavs/)"]
 async fn test_transcribe_wav_returns_text() {
     let (port, shutdown) = common::start_server(&common::model_dir()).await;
-    let wav = common::generate_wav(2, 16000);
+    let wav_path = common::test_wav_path(0);
+    let wav = tokio::fs::read(&wav_path)
+        .await
+        .expect("Failed to read test WAV");
 
     let resp = tokio::time::timeout(Duration::from_secs(30), async {
         reqwest::Client::new()
@@ -96,7 +99,7 @@ async fn test_transcribe_wav_returns_text() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore]
+#[ignore = "Requires model download"]
 async fn test_transcribe_empty_body_returns_400() {
     let (port, shutdown) = common::start_server(&common::model_dir()).await;
 
@@ -129,7 +132,7 @@ async fn test_transcribe_empty_body_returns_400() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore]
+#[ignore = "Requires model download"]
 async fn test_transcribe_invalid_audio_returns_422() {
     let (port, shutdown) = common::start_server(&common::model_dir()).await;
 
@@ -165,7 +168,7 @@ async fn test_transcribe_invalid_audio_returns_422() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore]
+#[ignore = "Requires model download"]
 async fn test_transcribe_stream_sse_incremental() {
     let (port, shutdown) = common::start_server(&common::model_dir()).await;
     let wav = common::generate_wav(10, 16000);
@@ -227,7 +230,7 @@ async fn test_transcribe_stream_sse_incremental() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore]
+#[ignore = "Requires model download"]
 async fn test_transcribe_stream_empty_body_returns_400() {
     let (port, shutdown) = common::start_server(&common::model_dir()).await;
 
@@ -252,7 +255,7 @@ async fn test_transcribe_stream_empty_body_returns_400() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore]
+#[ignore = "Requires model download"]
 async fn test_sse_events_well_formed() {
     let (port, shutdown) = common::start_server(&common::model_dir()).await;
     let wav = common::generate_wav(5, 16000);
@@ -319,7 +322,7 @@ async fn test_sse_events_well_formed() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore]
+#[ignore = "Requires model download"]
 async fn test_sse_midstream_disconnect() {
     let (port, shutdown) = common::start_server(&common::model_dir()).await;
     let wav = common::generate_wav(10, 16000);

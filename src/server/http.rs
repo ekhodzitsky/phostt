@@ -385,7 +385,7 @@ pub async fn transcribe_stream(
 
             // Flush final segment — best-effort; skipped on cancel.
             if !cancel.is_cancelled()
-                && let Some(seg) = engine.flush_state(&mut stream_state)
+                && let Some(seg) = engine.flush_state(&mut stream_state, &mut triplet)
             {
                 let _ = tx.blocking_send(Ok(seg));
             }

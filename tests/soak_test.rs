@@ -33,8 +33,8 @@ async fn test_soak_ws_continuous() {
     let model_dir = common::model_dir();
     let (port, shutdown_tx) = common::start_server(&model_dir).await;
 
-    // 2 seconds of PCM16 silence at 48kHz
-    let silence = common::generate_pcm16_silence(2.0, 48_000);
+    // Real Vietnamese audio from the model bundle (decoded to 16kHz PCM16 LE)
+    let audio = common::pcm16_from_wav(&common::test_wav_path(0));
 
     let mut iteration: u64 = 0;
     let mut error_count: u64 = 0;
@@ -53,8 +53,8 @@ async fn test_soak_ws_continuous() {
                     .await
                     .map_err(|_| format!("iter {iteration}: timeout connecting"))?;
 
-            // b. Send 2s PCM16 silence at 48kHz in 9600-byte chunks
-            for chunk in silence.chunks(9_600) {
+            // b. Send real audio in 9600-byte chunks
+            for chunk in audio.chunks(9_600) {
                 tokio::time::timeout(
                     Duration::from_secs(10),
                     sink.send(Message::Binary(chunk.to_vec().into())),

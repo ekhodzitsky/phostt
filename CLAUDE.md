@@ -8,6 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **Repository**: https://github.com/ekhodzitsky/phostt
 - **License**: MIT
+- **Crates.io**: `phostt` name verified available (not yet published)
 - **Status**: 0.1.0 pre-alpha. Forked from [`gigastt`](https://github.com/ekhodzitsky/gigastt) v0.9.4 (Russian STT). The HTTP/WS/SSE/metrics/shutdown stack is production-grade and unchanged. The inference path (model fetch, mel features, tokenizer, RNN-T decode) is being rewired from GigaAM to Zipformer-vi.
 
 ## Build & Test
@@ -21,12 +22,7 @@ cargo test                           # Unit tests (no model required)
 cargo clippy                         # Lint (no expected warnings)
 ```
 
-`cargo build` requires `protoc` in `PATH` for the in-tree ONNX quantization
-pipeline (see `build.rs`). Install via `brew install protobuf` (macOS) or
-`apt install protobuf-compiler` (Debian/Ubuntu). The quantization pipeline
-itself is no longer on the user hot path (Zipformer-vi ships pre-quantized
-INT8 weights upstream), but the proto types remain compiled for downstream
-re-quantization experiments.
+`--features coreml` is confirmed working on macOS ARM64 (Apple Silicon).
 
 ## Model
 
@@ -49,17 +45,16 @@ verification + atomic rename, same hardening as the upstream gigastt fetcher.
 ```
 src/
   lib.rs                  # Public module exports
-  main.rs                 # CLI (clap): serve, download, transcribe, quantize
+  main.rs                 # CLI (clap): serve, download, transcribe, inspect
   model/mod.rs            # Model bundle download (tar.bz2 → .onnx + bpe.model + tokens.txt)
   inference/
     mod.rs                # Engine: ONNX session pool, StreamingState, DecoderState
-    features.rs           # Mel spectrogram (80 bins, FFT=400, hop=160)
+    features.rs           # Mel spectrogram (80 bins, FFT=400, hop=160) via kaldi_native_fbank::OnlineFeature
     tokenizer.rs          # SentencePiece BPE (bpe.model)
     decode.rs             # RNN-T greedy decode (stateless decoder)
     audio.rs              # Audio loading, resampling, channel mixing
   error.rs                # Typed error types (PhosttError)
-  quantize.rs             # Native Rust INT8 quantizer (legacy, off the hot path)
-  onnx_proto.rs           # prost-generated ONNX types from proto/onnx.proto
+  inspect.rs              # ONNX session I/O metadata printer
   server/
     mod.rs                # axum router: HTTP + WebSocket on single port
     http.rs               # REST handlers: /health, /v1/models, /v1/transcribe, /v1/transcribe/stream
@@ -74,6 +69,20 @@ src/
   WebSocket protocol as the upstream gigastt server.
 - Server accepts configurable sample rates (8/16/24/44.1/48 kHz) via the
   `Configure` message; default 48 kHz is resampled to 16 kHz with rubato.
+
+## Streaming model
+
+Zipformer-vi-30M is an offline transducer. phostt wraps it in a sliding
+overlap-buffer (`StreamingState`) to expose real-time WebSocket streaming.
+The implementation uses a 4-second window with 1-second overlap: audio is
+chunked, each chunk is featurized and encoded independently, and partial
+results are merged across boundaries.
+
+`kaldi_native_fbank::OnlineFeature` in `inference/features.rs` drives the
+feature extraction, providing the same povey-window + preemphasis + Slaney
+mel filterbank pipeline that sherpa-onnx uses upstream. The `OnlineFeature`
+wrapper handles streaming increments, while the overlap-and-merge logic in
+`StreamingState` works around the offline encoder constraint.
 
 ### Graceful shutdown
 - `CancellationToken` + `TaskTracker` cascades through every WS / SSE handler.
@@ -121,12 +130,3 @@ src/
 - **Internal errors sanitized** — no path or model leakage to clients.
 - **Prometheus `/metrics`** (opt-in via `--metrics`).
 
-## Known TODO
-
-- `model/mod.rs` still references the gigastt `istupakov/gigaam-v3-onnx` HuggingFace repo. Replace with the sherpa-onnx GitHub-releases tarball flow.
-- `inference/features.rs` is configured for 64 mel-bins (GigaAM); rewire to 80 mel-bins, FFT=400, HTK-compatible filter bank for Zipformer.
-- `inference/tokenizer.rs` is a GigaAM BPE; replace with a SentencePiece reader for `bpe.model`.
-- `inference/decode.rs` runs the GigaAM stateful (LSTM) decoder; switch to the Zipformer stateless decoder (prev-token embedding only).
-- `inference/mod.rs`: rename ONNX file constants, drop LSTM `(h, c)` from `DecoderState`, update `BLANK` and `PRED_HIDDEN`.
-- New WAV fixture for `tests/e2e_*.rs` (currently they assume Russian audio).
-- `tests/benchmark.rs` was removed (Russian number-to-words helpers); rewrite a Vietnamese benchmark harness.

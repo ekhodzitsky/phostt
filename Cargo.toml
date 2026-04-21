@@ -5,6 +5,8 @@ edition = "2024"
 description = "Local STT server powered by Zipformer-vi RNN-T — on-device Vietnamese speech recognition via ONNX Runtime"
 license = "MIT"
 repository = "https://github.com/ekhodzitsky/phostt"
+readme = "README.md"
+authors = ["Eugene Khodzitsky <eugene.khodzitsky@gmail.com>"]
 keywords = ["stt", "speech-recognition", "zipformer", "onnx", "vietnamese"]
 categories = ["multimedia::audio", "command-line-utilities"]
 
@@ -13,11 +15,6 @@ default = []
 coreml = ["ort/coreml"]
 cuda = ["ort/cuda"]
 diarization = []
-# `quantize` retained as a no-op feature flag — phostt ships pre-quantized
-# Zipformer-vi INT8 weights from upstream sherpa-onnx, so no in-tree
-# quantization step is required on the user's hot path.
-quantize = []
-
 [dependencies]
 # ONNX Runtime
 ort = "2.0.0-rc.12"
@@ -52,9 +49,9 @@ anyhow = "1"
 # Cryptographic hashing for model verification
 sha2 = "0.10"
 
-# FFT for mel spectrogram. Pulled in directly because `quantize.rs` and
-# legacy callers still use the `Fft` trait; `kaldi-native-fbank` brings its
-# own `realfft`/`rustfft` planner internally.
+# FFT for mel spectrogram. `kaldi-native-fbank` brings its own
+# `realfft`/`rustfft` planner internally, but rustfft is kept as a direct
+# dependency for legacy callers that use the `Fft` trait.
 rustfft = "6"
 
 # Kaldi-compatible FBANK feature extractor (pure Rust port of
@@ -92,16 +89,6 @@ bytes = "1"
 # Implemented in `src/server/rate_limit.rs`; `dashmap` gives lock-free reads.
 dashmap = "6"
 
-# ONNX protobuf types for the legacy in-tree quantization pipeline
-# (`src/quantize.rs`). Kept available for downstream re-quantization
-# experiments even though phostt's hot path uses pre-quantized upstream
-# weights.
-prost = "0.13"
-
-[build-dependencies]
-# Regenerates ONNX types from `proto/onnx.proto` into `OUT_DIR/onnx.rs`
-# at build time. Requires `protoc` in `PATH` (see `build.rs`).
-prost-build = "0.14"
 
 [dev-dependencies]
 tempfile = "3"

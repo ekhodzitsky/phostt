@@ -936,14 +936,18 @@ async fn handle_stop_message(
     sink: &mut WsSink,
     engine: &Arc<Engine>,
     state_opt: &mut Option<crate::inference::StreamingState>,
+    triplet_opt: &mut Option<SessionTriplet>,
     peer: SocketAddr,
 ) -> Result<FrameOutcome> {
     tracing::info!("Stop received from {peer}, finalizing");
     let Some(mut state) = state_opt.take() else {
         return Ok(FrameOutcome::Break);
     };
-    let flush_seg = engine.flush_state(&mut state);
-    drop(state);
+    let Some(mut triplet) = triplet_opt.take() else {
+        return Ok(FrameOutcome::Break);
+    };
+    let flush_seg = engine.flush_state(&mut state, &mut triplet);
+    *triplet_opt = Some(triplet);
     let final_msg = if let Some(seg) = flush_seg {
         ServerMessage::Final {
             text: seg.text,
@@ -969,10 +973,20 @@ async fn flush_and_final(
     sink: &mut WsSink,
     engine: &Arc<Engine>,
     state_opt: &mut Option<crate::inference::StreamingState>,
+    triplet_opt: &mut Option<SessionTriplet>,
 ) -> Result<()> {
+    let Some(mut triplet) = triplet_opt.take() else {
+        let final_msg = ServerMessage::Final {
+            text: String::new(),
+            timestamp: crate::inference::now_timestamp(),
+            words: vec![],
+        };
+        return send_server_message(sink, &final_msg).await;
+    };
     let flush_seg = state_opt
         .as_mut()
-        .and_then(|state| engine.flush_state(state));
+        .and_then(|state| engine.flush_state(state, &mut triplet));
+    *triplet_opt = Some(triplet);
     let final_msg = match flush_seg {
         Some(seg) => ServerMessage::Final {
             text: seg.text,
@@ -1051,7 +1065,7 @@ async fn handle_ws_inner(
         // pre-check here guarantees the deadline / cancel wins.
         if cancel.is_cancelled() {
             tracing::info!(peer = %peer, "Shutdown signalled — flushing WS session");
-            let _ = flush_and_final(&mut sink, engine, &mut state_opt).await;
+            let _ = flush_and_final(&mut sink, engine, &mut state_opt, &mut triplet_opt).await;
             let _ = sink
                 .send(WsMessage::Close(Some(axum::extract::ws::CloseFrame {
                     code: 1001,
@@ -1075,7 +1089,7 @@ async fn handle_ws_inner(
                 },
             )
             .await;
-            let _ = flush_and_final(&mut sink, engine, &mut state_opt).await;
+            let _ = flush_and_final(&mut sink, engine, &mut state_opt, &mut triplet_opt).await;
             let _ = sink
                 .send(WsMessage::Close(Some(axum::extract::ws::CloseFrame {
                     code: 1008,
@@ -1095,7 +1109,7 @@ async fn handle_ws_inner(
                 tracing::info!(peer = %peer, "Shutdown signalled — flushing WS session");
                 // Best-effort: the socket may already be dead if the peer
                 // closed first, so every send is swallowed.
-                let _ = flush_and_final(&mut sink, engine, &mut state_opt).await;
+                let _ = flush_and_final(&mut sink, engine, &mut state_opt, &mut triplet_opt).await;
                 let _ = sink
                     .send(WsMessage::Close(Some(axum::extract::ws::CloseFrame {
                         code: 1001,
@@ -1120,7 +1134,7 @@ async fn handle_ws_inner(
                     },
                 )
                 .await;
-                let _ = flush_and_final(&mut sink, engine, &mut state_opt).await;
+                let _ = flush_and_final(&mut sink, engine, &mut state_opt, &mut triplet_opt).await;
                 let _ = sink
                     .send(WsMessage::Close(Some(axum::extract::ws::CloseFrame {
                         code: 1008,
@@ -1177,7 +1191,7 @@ async fn handle_ws_inner(
                             .await
                         }
                         Ok(ClientMessage::Stop) => {
-                            handle_stop_message(&mut sink, engine, &mut state_opt, peer).await
+                            handle_stop_message(&mut sink, engine, &mut state_opt, &mut triplet_opt, peer).await
                         }
                         Err(_) => {
                             tracing::debug!(

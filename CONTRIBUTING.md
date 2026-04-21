@@ -6,8 +6,6 @@
 cargo build                            # CPU debug build
 cargo build --features coreml          # macOS ARM64 with CoreML
 cargo build --features cuda            # Linux x86_64 with CUDA 12+
-cargo build --features quantize        # no-op — kept for backwards compatibility
-
 cargo test                             # unit tests (no model needed)
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all -- --check

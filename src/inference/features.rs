@@ -67,12 +67,29 @@ impl MelSpectrogram {
 /// FBANK options used by Zipformer-vi. Kaldi-default everything except the
 /// three knobs the model demands: 80 mel bins, no per-frame energy, no
 /// dither (so identical input -> identical features in tests + production).
-pub(super) fn phostt_fbank_options() -> FbankOptions {
+pub(crate) fn phostt_fbank_options() -> FbankOptions {
     let mut opts = FbankOptions::default();
     opts.mel_opts.num_bins = 80;
     opts.use_energy = false;
     opts.frame_opts.dither = 0.0;
     opts
+}
+
+/// Extract `num_frames` starting at `start_frame` from an `OnlineFeature`
+/// into a flat `[num_frames, N_MELS]` buffer.
+pub(crate) fn extract_online_frames(
+    online: &OnlineFeature,
+    start_frame: usize,
+    num_frames: usize,
+) -> Vec<f32> {
+    let mut out = vec![0.0; num_frames * super::N_MELS];
+    for f in 0..num_frames {
+        let frame = online
+            .get_frame(start_frame + f)
+            .expect("frame index < num_frames_ready");
+        out[f * super::N_MELS..(f + 1) * super::N_MELS].copy_from_slice(&frame[..super::N_MELS]);
+    }
+    out
 }
 
 #[cfg(test)]
