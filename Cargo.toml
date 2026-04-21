@@ -1,0 +1,109 @@
+[package]
+name = "gigastt"
+version = "0.9.4"
+edition = "2024"
+description = "Local STT server powered by GigaAM v3 e2e_rnnt — on-device Russian speech recognition via ONNX Runtime"
+license = "MIT"
+repository = "https://github.com/ekhodzitsky/gigastt"
+keywords = ["stt", "speech-recognition", "gigaam", "onnx", "russian"]
+categories = ["multimedia::audio", "command-line-utilities"]
+
+[features]
+default = []
+coreml = ["ort/coreml"]
+cuda = ["ort/cuda"]
+diarization = []
+# `quantize` used to gate the INT8 quantization pipeline. It is now always
+# compiled in (the user's core workflow is: download → quantize → serve),
+# so the feature is retained as a no-op for backwards compatibility with
+# `cargo install gigastt --features quantize`.
+quantize = []
+
+[dependencies]
+# ONNX Runtime
+ort = "2.0.0-rc.12"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Async MPMC channel — backs the SessionPool (FIFO + close semantics)
+async-channel = "2"
+
+# HTTP + WebSocket server (single port via axum)
+axum = { version = "0.8", features = ["ws", "multipart"] }
+futures-util = "0.3"
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# HTTP client for model download
+reqwest = { version = "0.13", features = ["stream"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+anyhow = "1"
+
+# Cryptographic hashing for model verification
+sha2 = "0.10"
+
+# FFT for mel spectrogram
+rustfft = "6"
+
+# High-quality audio resampling
+rubato = "0.16"
+
+# Async stream adapters (ReceiverStream for SSE)
+tokio-stream = "0.1"
+
+# Cancellation + task tracking for graceful WS/SSE drain on shutdown (V1-03).
+# `rt` pulls in `CancellationToken` + `TaskTracker` (tokio-util 0.7).
+tokio-util = { version = "0.7", features = ["rt"] }
+
+# Audio file reading (for `transcribe` command)
+symphonia = { version = "0.5", features = ["aac", "isomp4", "mp3", "ogg", "flac", "pcm", "wav"] }
+
+# Explicit pin for zero-copy byte buffers shared with symphonia (used by the
+# REST upload decode path). Already transitive via axum/tokio; pinning makes
+# the dependency direct so the zero-copy decode contract is discoverable.
+bytes = "1"
+
+# Per-IP rate limiting (token bucket, optional — off by default). Implemented
+# in `src/server/rate_limit.rs`; `dashmap` gives lock-free reads on the common
+# path. Previously this was `tower_governor = "0.7"`, which pulled
+# `governor` + `forwarded-header-value` + `quanta` transitively.
+dashmap = "6"
+
+# Prometheus-compatible metrics (exposed behind `--metrics` flag, off by default)
+
+
+# ONNX protobuf types for the native INT8 quantization pipeline
+# (`src/quantize.rs`). Vendored `.proto` + `prost-build` (build-dep) replaces
+# the unmaintained `onnx-pb 0.1.4` crate and unblocks `RUSTSEC-2021-0073`.
+prost = "0.13"
+
+[build-dependencies]
+# Regenerates ONNX types from `proto/onnx.proto` into `OUT_DIR/onnx.rs`
+# at build time. Requires `protoc` in `PATH` (see `build.rs`).
+prost-build = "0.14"
+
+[[test]]
+name = "benchmark"
+harness = false
+
+[dev-dependencies]
+tempfile = "3"
+tokio-tungstenite = "0.29"
+# `tracing-subscriber` is declared in `[dependencies]`; cargo already exposes
+# it to integration tests, so no separate dev-dep is needed.
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
