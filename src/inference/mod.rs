@@ -36,8 +36,15 @@ pub const N_MELS: usize = 80;
 pub const N_FFT: usize = 400;
 /// Hop length between consecutive FBANK frames in samples (10 ms × 16 kHz).
 pub const HOP_LENGTH: usize = 160;
-/// Hidden dimension of the RNN-T prediction (decoder) network.
-pub const PRED_HIDDEN: usize = 320;
+/// Encoder output channel dimension. Zipformer-vi-30M emits 512-dim frames
+/// after a 4× subsampling stage.
+pub const ENCODER_OUT_DIM: usize = 512;
+/// Decoder output dimension (matches encoder so the joiner is symmetric).
+pub const DECODER_OUT_DIM: usize = 512;
+/// Number of previously emitted tokens the stateless Zipformer decoder
+/// reads on every step. Sherpa-onnx Zipformer transducers ship with a
+/// context size of 2 (matches icefall defaults).
+pub const CONTEXT_SIZE: usize = 2;
 
 fn ort_err(e: impl std::fmt::Display) -> anyhow::Error {
     anyhow::anyhow!("{e}")
@@ -239,31 +246,42 @@ impl<T> OwnedReservation<T> {
     }
 }
 
-/// Decoder LSTM hidden state persisted across streaming chunks.
+/// State passed to Zipformer's stateless decoder on every step.
 ///
-/// Created via [`DecoderState::new`] or obtained from [`StreamingState::decoder`].
-/// Holds the RNN-T prediction network state between decode steps.
+/// Holds the rolling [`CONTEXT_SIZE`]-token window the decoder embedding
+/// reads, plus a running blank counter used by streaming endpointing.
+/// Initialised left-padded with `blank_id` so the very first decoder
+/// invocation sees `[<blk>, <blk>]`.
 #[non_exhaustive]
 pub struct DecoderState {
-    /// LSTM hidden state vector (length [`PRED_HIDDEN`]).
-    pub h: Vec<f32>,
-    /// LSTM cell state vector (length [`PRED_HIDDEN`]).
-    pub c: Vec<f32>,
-    /// Previously emitted token ID (initialized to `blank_id`).
-    pub prev_token: i64,
+    /// Last [`CONTEXT_SIZE`] non-blank token ids (left-padded with `blank_id`).
+    pub tokens: Vec<i64>,
+    /// Blank token id (cached so [`Self::push_token`] can reset state without
+    /// re-reading it from the engine).
+    pub blank_id: usize,
     /// Count of consecutive blank frames (used for endpointing).
     pub consecutive_blanks: usize,
 }
 
 impl DecoderState {
-    /// Create a new decoder state initialized to zeros with the given blank token ID.
+    /// Create a fresh decoder state with the context window left-padded with
+    /// `blank_id` and zero blank streak.
     pub fn new(blank_id: usize) -> Self {
         Self {
-            h: vec![0.0; PRED_HIDDEN],
-            c: vec![0.0; PRED_HIDDEN],
-            prev_token: blank_id as i64,
+            tokens: vec![blank_id as i64; CONTEXT_SIZE],
+            blank_id,
             consecutive_blanks: 0,
         }
+    }
+
+    /// Slide a newly emitted non-blank token into the context window,
+    /// dropping the oldest entry to keep the length at [`CONTEXT_SIZE`].
+    pub fn push_token(&mut self, token: i64) {
+        // VecDeque would be cleaner but the window is fixed at CONTEXT_SIZE,
+        // so a `rotate_left + assign` keeps the tensor view contiguous.
+        self.tokens.rotate_left(1);
+        let last = self.tokens.last_mut().expect("CONTEXT_SIZE > 0");
+        *last = token;
     }
 }
 
@@ -834,15 +852,18 @@ impl Engine {
         decoder_state: &mut DecoderState,
         frame_offset: usize,
     ) -> anyhow::Result<(Vec<WordInfo>, bool)> {
-        // Encoder input: audio_signal [1, 64, num_frames], length [1]
-        let signal_tensor = TensorRef::from_array_view(([1_usize, N_MELS, num_frames], features))?;
+        // Zipformer encoder input: features [1, T, N_MELS] (frames-first)
+        // + features_length [1] int64. Output: encoder_out [1, T', 512]
+        // (Zipformer subsamples by 4) + encoder_out_lens [1] int64.
+        let features_tensor =
+            TensorRef::from_array_view(([1_usize, num_frames, N_MELS], features))?;
         let length_data = [num_frames as i64];
         let length_tensor = TensorRef::from_array_view(([1_usize], length_data.as_slice()))?;
 
         let enc_start = std::time::Instant::now();
         let encoder_outputs = triplet
             .encoder
-            .run(ort::inputs![signal_tensor, length_tensor])
+            .run(ort::inputs![features_tensor, length_tensor])
             .context("Encoder inference failed")?;
         tracing::info!(
             elapsed_ms = enc_start.elapsed().as_millis() as u64,
@@ -853,7 +874,7 @@ impl Engine {
             .try_extract_tensor::<f32>()
             .context("Failed to extract encoder output")?;
         let (_len_shape, len_data) = encoder_outputs[1]
-            .try_extract_tensor::<i32>()
+            .try_extract_tensor::<i64>()
             .context("Failed to extract encoder length")?;
 
         let enc_len = usize::try_from(len_data[0]).context("Negative encoder length")?;
@@ -1002,25 +1023,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_decoder_state_new_zeros() {
-        let blank_id = 1024;
+    fn test_decoder_state_new_left_pads_context_with_blank() {
+        let blank_id = 0;
         let state = DecoderState::new(blank_id);
-        assert!(state.h.iter().all(|&v| v == 0.0));
-        assert!(state.c.iter().all(|&v| v == 0.0));
-        assert_eq!(state.prev_token, blank_id as i64);
+        assert_eq!(state.tokens.len(), CONTEXT_SIZE);
+        assert!(state.tokens.iter().all(|&t| t == blank_id as i64));
+        assert_eq!(state.blank_id, blank_id);
+        assert_eq!(state.consecutive_blanks, 0);
     }
 
     #[test]
-    fn test_decoder_state_dimensions() {
-        let state = DecoderState::new(1024);
-        assert_eq!(state.h.len(), PRED_HIDDEN);
-        assert_eq!(state.c.len(), PRED_HIDDEN);
+    fn test_decoder_state_push_token_slides_window() {
+        let mut state = DecoderState::new(0);
+        // CONTEXT_SIZE == 2 → start [0, 0], push 7 → [0, 7], push 9 → [7, 9].
+        state.push_token(7);
+        assert_eq!(state.tokens.last().copied(), Some(7));
+        state.push_token(9);
+        assert_eq!(state.tokens, vec![7, 9]);
     }
 
     #[test]
-    fn test_decoder_state_custom_blank_id() {
+    fn test_decoder_state_custom_blank_id_seeds_context() {
         let state = DecoderState::new(42);
-        assert_eq!(state.prev_token, 42);
+        assert!(state.tokens.iter().all(|&t| t == 42));
     }
 
     // ---- Pool tests (B.7) ---------------------------------------------------

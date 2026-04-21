@@ -33,8 +33,8 @@ impl MelSpectrogram {
     }
 
     /// Compute log-FBANK features for an offline buffer.
-    /// Returns `[n_mels, num_frames]` flat in channels-first layout to match
-    /// the legacy tensor shape `Engine::process_chunk` expects.
+    /// Returns `[num_frames, n_mels]` flat in frames-first layout — the
+    /// shape Zipformer's encoder ONNX expects for its `features` input.
     pub fn compute(&self, samples: &[f32]) -> (Vec<f32>, usize) {
         if samples.is_empty() {
             return (vec![0.0; self.n_mels], 1);
@@ -51,14 +51,14 @@ impl MelSpectrogram {
             // remain valid for the few callers that pass <25 ms buffers.
             return (vec![0.0; self.n_mels], 1);
         }
-        let mut out = vec![0f32; self.n_mels * num_frames];
+        let mut out = vec![0f32; num_frames * self.n_mels];
         for f in 0..num_frames {
             let frame = online
                 .get_frame(f)
                 .expect("frame index < num_frames_ready must be retrievable");
-            for m in 0..self.n_mels {
-                out[m * num_frames + f] = frame[m];
-            }
+            // Frames-first: contiguous mel vector for frame `f` lives at
+            // `out[f * n_mels .. (f + 1) * n_mels]`.
+            out[f * self.n_mels..(f + 1) * self.n_mels].copy_from_slice(&frame[..self.n_mels]);
         }
         (out, num_frames)
     }
