@@ -52,8 +52,17 @@ anyhow = "1"
 # Cryptographic hashing for model verification
 sha2 = "0.10"
 
-# FFT for mel spectrogram
+# FFT for mel spectrogram. Pulled in directly because `quantize.rs` and
+# legacy callers still use the `Fft` trait; `kaldi-native-fbank` brings its
+# own `realfft`/`rustfft` planner internally.
 rustfft = "6"
+
+# Kaldi-compatible FBANK feature extractor (pure Rust port of
+# kaldi-native-fbank, the same library sherpa-onnx uses for Zipformer
+# preprocessing). Provides povey window + preemphasis + Slaney mel banks
+# bit-for-bit aligned with the upstream pipeline that produced the
+# Zipformer-vi weights, plus an OnlineFeature wrapper used by streaming.
+kaldi-native-fbank = "0.1"
 
 # High-quality audio resampling
 rubato = "0.16"

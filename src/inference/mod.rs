@@ -28,10 +28,13 @@ use features::MelSpectrogram;
 use tokenizer::Tokenizer;
 
 /// Number of mel frequency bins used for spectrogram features.
-pub const N_MELS: usize = 64;
-/// FFT window size in samples (320 samples = 20ms at 16kHz).
-pub const N_FFT: usize = 320;
-/// Hop length between consecutive FFT frames in samples (160 samples = 10ms at 16kHz).
+/// Zipformer-vi expects 80-bin FBANK (kaldi-native-fbank default for ASR).
+pub const N_MELS: usize = 80;
+/// Frame window length in samples (25 ms × 16 kHz). The FBANK extractor pads
+/// internally to the next power of two (512) before the FFT; callers that
+/// only need to know "how many samples make one usable frame" use this.
+pub const N_FFT: usize = 400;
+/// Hop length between consecutive FBANK frames in samples (10 ms × 16 kHz).
 pub const HOP_LENGTH: usize = 160;
 /// Hidden dimension of the RNN-T prediction (decoder) network.
 pub const PRED_HIDDEN: usize = 320;

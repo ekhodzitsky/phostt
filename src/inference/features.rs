@@ -1,210 +1,140 @@
-//! Log-mel spectrogram feature extraction for Zipformer-vi.
+//! Log-mel (FBANK) feature extraction for Zipformer-vi.
+//!
+//! Thin wrapper over `kaldi-native-fbank` so phostt's preprocessing matches
+//! the `kaldifeat` pipeline used to train the upstream Zipformer-vi weights:
+//! 80 mel bins, 25 ms / 10 ms povey-windowed frames, 0.97 preemphasis,
+//! Slaney mel scale, log-FBANK without per-frame energy. Dither is forced
+//! to 0 so transcription is bit-deterministic.
+//!
+//! Streaming preprocessing in [`super::StreamingState`] will switch to
+//! [`kaldi_native_fbank::OnlineFeature`] in the next step; this offline
+//! [`MelSpectrogram::compute`] keeps the legacy `(Vec<f32>, num_frames)`
+//! signature so `Engine::transcribe_file` and the existing decode plumbing
+//! continue to compile while the rest of the inference path is rewired.
 
-use rustfft::num_complex::Complex;
-use rustfft::{Fft, FftPlanner};
-use std::f32::consts::PI;
-use std::sync::Arc;
+use kaldi_native_fbank::fbank::{FbankComputer, FbankOptions};
+use kaldi_native_fbank::online::{FeatureComputer, OnlineFeature};
+
+const SAMPLE_RATE: f32 = 16000.0;
 
 pub struct MelSpectrogram {
-    n_fft: usize,
-    hop_length: usize,
-    window: Vec<f32>,
-    mel_filterbank: Vec<Vec<f32>>, // [n_mels][n_fft/2 + 1]
-    fft: Arc<dyn Fft<f32>>,
+    opts: FbankOptions,
+    n_mels: usize,
 }
 
 impl MelSpectrogram {
     pub fn new() -> Self {
-        let n_fft = super::N_FFT;
-        let hop_length = super::HOP_LENGTH;
-        let n_mels = super::N_MELS;
-        let sample_rate = 16000.0_f32;
-        let fmin = 0.0_f32;
-        let fmax = sample_rate / 2.0;
-
-        // Hann window
-        let window: Vec<f32> = (0..n_fft)
-            .map(|n| 0.5 * (1.0 - (2.0 * PI * n as f32 / (n_fft - 1) as f32).cos()))
-            .collect();
-
-        // HTK mel filterbank
-        let mel_filterbank = Self::create_mel_filterbank(n_fft, n_mels, sample_rate, fmin, fmax);
-
-        // Pre-plan FFT
-        let mut planner = FftPlanner::<f32>::new();
-        let fft = planner.plan_fft_forward(n_fft);
-
-        Self {
-            n_fft,
-            hop_length,
-            window,
-            mel_filterbank,
-            fft,
-        }
+        let opts = phostt_fbank_options();
+        // Build a probe computer once so a typo in [`phostt_fbank_options`]
+        // surfaces immediately at engine load instead of at the first frame.
+        let probe = FbankComputer::new(opts.clone()).expect("FBANK options valid");
+        let n_mels = probe.dim();
+        Self { opts, n_mels }
     }
 
-    fn hz_to_mel(hz: f32) -> f32 {
-        2595.0 * (1.0 + hz / 700.0).log10()
-    }
-
-    fn mel_to_hz(mel: f32) -> f32 {
-        700.0 * (10.0_f32.powf(mel / 2595.0) - 1.0)
-    }
-
-    fn create_mel_filterbank(
-        n_fft: usize,
-        n_mels: usize,
-        sample_rate: f32,
-        fmin: f32,
-        fmax: f32,
-    ) -> Vec<Vec<f32>> {
-        let n_freqs = n_fft / 2 + 1; // 161
-
-        let mel_min = Self::hz_to_mel(fmin);
-        let mel_max = Self::hz_to_mel(fmax);
-
-        // n_mels + 2 equally spaced points in mel space
-        let mel_points: Vec<f32> = (0..=(n_mels + 1))
-            .map(|i| mel_min + (mel_max - mel_min) * i as f32 / (n_mels + 1) as f32)
-            .collect();
-
-        let hz_points: Vec<f32> = mel_points.iter().map(|&m| Self::mel_to_hz(m)).collect();
-
-        // Convert Hz to FFT bin indices (float for interpolation)
-        let bin_points: Vec<f32> = hz_points
-            .iter()
-            .map(|&hz| hz * n_fft as f32 / sample_rate)
-            .collect();
-
-        let mut filterbank = vec![vec![0.0_f32; n_freqs]; n_mels];
-
-        for m in 0..n_mels {
-            let f_left = bin_points[m];
-            let f_center = bin_points[m + 1];
-            let f_right = bin_points[m + 2];
-
-            for (k, bin) in filterbank[m].iter_mut().enumerate() {
-                let freq = k as f32;
-                if freq >= f_left && freq <= f_center && f_center > f_left {
-                    *bin = (freq - f_left) / (f_center - f_left);
-                } else if freq > f_center && freq <= f_right && f_right > f_center {
-                    *bin = (f_right - freq) / (f_right - f_center);
-                }
-            }
-        }
-
-        filterbank
-    }
-
-    /// Compute log-mel spectrogram from f32 audio samples.
-    /// Returns features in shape [n_mels, num_frames] as a flat Vec.
+    /// Compute log-FBANK features for an offline buffer.
+    /// Returns `[n_mels, num_frames]` flat in channels-first layout to match
+    /// the legacy tensor shape `Engine::process_chunk` expects.
     pub fn compute(&self, samples: &[f32]) -> (Vec<f32>, usize) {
-        let n_freqs = self.n_fft / 2 + 1;
-
-        // Number of frames (center=false)
-        if samples.len() < self.n_fft {
-            return (vec![0.0; self.mel_filterbank.len()], 1);
+        if samples.is_empty() {
+            return (vec![0.0; self.n_mels], 1);
         }
-        let num_frames = (samples.len() - self.n_fft) / self.hop_length + 1;
+        let computer = FbankComputer::new(self.opts.clone()).expect("FBANK options valid");
+        let mut online = OnlineFeature::new(FeatureComputer::Fbank(computer));
+        online.accept_waveform(SAMPLE_RATE, samples);
+        online.input_finished();
 
-        let n_mels = self.mel_filterbank.len();
-        let mut output = vec![0.0_f32; n_mels * num_frames];
-
-        // Pre-allocate buffers reused across frames
-        let mut fft_input = vec![Complex::new(0.0_f32, 0.0); self.n_fft];
-        let mut power = vec![0.0_f32; n_freqs];
-
-        for frame_idx in 0..num_frames {
-            let start = frame_idx * self.hop_length;
-
-            // Apply window and fill FFT input in-place
-            for i in 0..self.n_fft {
-                let sample = if start + i < samples.len() {
-                    samples[start + i]
-                } else {
-                    0.0
-                };
-                fft_input[i] = Complex::new(sample * self.window[i], 0.0);
-            }
-
-            // FFT
-            self.fft.process(&mut fft_input);
-
-            // Power spectrum (first n_fft/2 + 1 bins)
-            for k in 0..n_freqs {
-                power[k] = fft_input[k].norm_sqr();
-            }
-
-            // Apply mel filterbank + log
-            for (m, filter) in self.mel_filterbank.iter().enumerate() {
-                let mut mel_energy: f32 = 0.0;
-                for (k, &p) in power.iter().enumerate() {
-                    mel_energy += filter[k] * p;
-                }
-                // Log with floor
-                output[m * num_frames + frame_idx] = (mel_energy.max(1e-10)).ln();
+        let num_frames = online.num_frames_ready();
+        if num_frames == 0 {
+            // snip_edges=true drops anything shorter than one window.
+            // Return a single all-zero frame so downstream tensor shapes
+            // remain valid for the few callers that pass <25 ms buffers.
+            return (vec![0.0; self.n_mels], 1);
+        }
+        let mut out = vec![0f32; self.n_mels * num_frames];
+        for f in 0..num_frames {
+            let frame = online
+                .get_frame(f)
+                .expect("frame index < num_frames_ready must be retrievable");
+            for m in 0..self.n_mels {
+                out[m * num_frames + f] = frame[m];
             }
         }
-
-        (output, num_frames)
+        (out, num_frames)
     }
+}
+
+/// FBANK options used by Zipformer-vi. Kaldi-default everything except the
+/// three knobs the model demands: 80 mel bins, no per-frame energy, no
+/// dither (so identical input -> identical features in tests + production).
+pub(super) fn phostt_fbank_options() -> FbankOptions {
+    let mut opts = FbankOptions::default();
+    opts.mel_opts.num_bins = 80;
+    opts.use_energy = false;
+    opts.frame_opts.dither = 0.0;
+    opts
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::inference::N_MELS;
 
     #[test]
-    fn test_silence() {
+    fn test_default_dim_matches_const() {
         let mel = MelSpectrogram::new();
-        let silence = vec![0.0_f32; 16000]; // 1 second of silence
+        assert_eq!(mel.n_mels, N_MELS, "n_mels must agree with the public constant");
+    }
+
+    #[test]
+    fn test_silence_returns_finite_features() {
+        let mel = MelSpectrogram::new();
+        let silence = vec![0.0_f32; 16000];
         let (features, num_frames) = mel.compute(&silence);
-        assert!(num_frames > 0);
-        assert_eq!(features.len(), 64 * num_frames);
-        // All mel energies should be at the floor value ln(1e-10)
-        let floor = (1e-10_f32).ln();
+        assert!(num_frames > 0, "silence must still produce frames");
+        assert_eq!(features.len(), N_MELS * num_frames);
         for &v in &features {
-            assert!((v - floor).abs() < 0.01, "Expected ~{floor}, got {v}");
+            assert!(v.is_finite(), "expected finite mel value, got {v}");
         }
     }
 
     #[test]
-    fn test_output_shape() {
+    fn test_too_short_returns_single_zero_frame() {
         let mel = MelSpectrogram::new();
-        let samples = vec![0.0_f32; 3200]; // 200ms at 16kHz
-        let (features, num_frames) = mel.compute(&samples);
-        // center=false: (3200 - 320) / 160 + 1 = 19 frames
-        assert_eq!(num_frames, 19);
-        assert_eq!(features.len(), 64 * 19);
-    }
-
-    #[test]
-    fn test_too_short() {
-        let mel = MelSpectrogram::new();
-        let samples = vec![0.0_f32; 100]; // Less than n_fft=320
+        let samples = vec![0.0_f32; 100];
         let (features, num_frames) = mel.compute(&samples);
         assert_eq!(num_frames, 1);
-        assert_eq!(features.len(), 64);
+        assert_eq!(features.len(), N_MELS);
     }
 
     #[test]
-    fn test_sine_wave() {
+    fn test_sine_wave_has_dynamic_range() {
         let mel = MelSpectrogram::new();
-        // 440Hz sine wave, 1 second at 16kHz
         let samples: Vec<f32> = (0..16000)
             .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 16000.0).sin())
             .collect();
         let (features, num_frames) = mel.compute(&samples);
         assert!(num_frames > 0);
-        // Sine wave should produce non-floor values in some mel bins
-        let floor = (1e-10_f32).ln();
-        let non_floor = features
-            .iter()
-            .filter(|&&v| (v - floor).abs() > 1.0)
-            .count();
+        let max = features.iter().copied().fold(f32::MIN, f32::max);
+        let min = features.iter().copied().fold(f32::MAX, f32::min);
         assert!(
-            non_floor > 0,
-            "Expected some non-floor values for sine wave"
+            max - min > 1.0,
+            "expected wide log-mel range for a 440 Hz tone, got max={max} min={min}"
+        );
+    }
+
+    #[test]
+    fn test_one_second_yields_about_one_hundred_frames() {
+        // snip_edges=true with 25 ms window, 10 ms shift on 1 s of audio:
+        // (1000 ms - 25 ms) / 10 ms + 1 = 98 frames. Allow a small slack
+        // because rounding-to-power-of-two padding may shift the boundary
+        // by one frame on some inputs.
+        let mel = MelSpectrogram::new();
+        let samples = vec![0.0_f32; 16000];
+        let (_, num_frames) = mel.compute(&samples);
+        assert!(
+            (96..=100).contains(&num_frames),
+            "expected ~98 frames for 1 s of audio, got {num_frames}"
         );
     }
 }

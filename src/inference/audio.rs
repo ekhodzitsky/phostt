@@ -411,7 +411,7 @@ mod tests {
 
     #[test]
     fn test_buffer_short_input_returns_none() {
-        // Less than N_FFT (320) samples → buffer everything
+        // Less than N_FFT samples → buffer everything
         let new_samples = vec![0.0; 100];
         let mut buffer = Vec::new();
         let result = prepare_audio_buffer(&new_samples, &mut buffer);
@@ -421,7 +421,7 @@ mod tests {
 
     #[test]
     fn test_buffer_exact_frame() {
-        // Exactly N_FFT (320) samples → one frame, no leftover
+        // Exactly N_FFT samples → one frame, no leftover
         let new_samples = vec![1.0; N_FFT];
         let mut buffer = Vec::new();
         let result = prepare_audio_buffer(&new_samples, &mut buffer);
@@ -445,17 +445,19 @@ mod tests {
     #[test]
     fn test_buffer_accumulates_across_calls() {
         let mut buffer = Vec::new();
-        // First call: 200 samples (< 320) → buffered
-        let result = prepare_audio_buffer(&vec![1.0; 200], &mut buffer);
+        // First call: half a window → buffered, no frame yet.
+        let half = N_FFT / 2;
+        let result = prepare_audio_buffer(&vec![1.0; half], &mut buffer);
         assert!(result.is_none());
-        assert_eq!(buffer.len(), 200);
+        assert_eq!(buffer.len(), half);
 
-        // Second call: 200 more → total 400, enough for 1 frame (320), leftover 80
-        let result = prepare_audio_buffer(&vec![2.0; 200], &mut buffer);
+        // Second call: another half → total = N_FFT, exactly one frame ready,
+        // no leftover.
+        let result = prepare_audio_buffer(&vec![2.0; N_FFT - half], &mut buffer);
         assert!(result.is_some());
         let usable = result.unwrap();
-        assert_eq!(usable.len(), 320);
-        assert_eq!(buffer.len(), 80);
+        assert_eq!(usable.len(), N_FFT);
+        assert_eq!(buffer.len(), 0);
     }
 
     #[test]
@@ -472,12 +474,12 @@ mod tests {
 
     #[test]
     fn test_buffer_multi_frame() {
-        // N_FFT + HOP_LENGTH = 480 → 2 frames, no leftover
+        // N_FFT + HOP_LENGTH samples → 2 frames usable, no leftover
+        // (the second frame starts HOP_LENGTH samples into the first).
         let new_samples = vec![1.0; N_FFT + HOP_LENGTH];
         let mut buffer = Vec::new();
         let result = prepare_audio_buffer(&new_samples, &mut buffer);
         assert!(result.is_some());
-        // 2 frames: usable = (2-1)*160 + 320 = 480
         assert_eq!(result.unwrap().len(), N_FFT + HOP_LENGTH);
         assert!(buffer.is_empty());
     }
