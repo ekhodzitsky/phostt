@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Repository**: https://github.com/ekhodzitsky/phostt
 - **License**: MIT
 - **Crates.io**: `phostt` name verified available (not yet published)
-- **Status**: 0.1.0 pre-alpha. Forked from [`gigastt`](https://github.com/ekhodzitsky/gigastt) v0.9.4 (Russian STT). The HTTP/WS/SSE/metrics/shutdown stack is production-grade and unchanged. The inference path (model fetch, mel features, tokenizer, RNN-T decode) is being rewired from GigaAM to Zipformer-vi.
+- **Status**: 0.1.0 release candidate. Forked from [`gigastt`](https://github.com/ekhodzitsky/gigastt) v0.9.4 (Russian STT). The HTTP/WS/SSE/metrics/shutdown stack is production-grade and unchanged. The inference path (model fetch, 80-bin mel features, SentencePiece BPE tokenizer, stateless RNN-T decode, overlap-buffer streaming) is fully wired and tested against Vietnamese audio fixtures.
 
 ## Build & Test
 

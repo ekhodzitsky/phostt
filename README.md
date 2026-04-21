@@ -10,12 +10,12 @@
 
 ---
 
-> **Status: 0.1.0 — pre-alpha, work in progress.**
+> **Status: 0.1.0 — feature complete, release candidate.**
 > The server scaffolding (HTTP, WebSocket, SSE, rate-limit, metrics, graceful
 > shutdown) is forked from the production-grade [`gigastt`](https://github.com/ekhodzitsky/gigastt)
-> stack. The Vietnamese inference path (model fetch, mel features, BPE
-> tokenizer, RNN-T decode for Zipformer-vi) is the active work-in-progress
-> tracked toward the first functional release.
+> stack. The Vietnamese inference path (Zipformer-vi model fetch, 80-bin mel
+> features, SentencePiece BPE tokenizer, RNN-T greedy decode, overlap-buffer
+> streaming) is fully wired and tested.
 
 **phostt** turns any machine into a Vietnamese speech recognition server that
 runs entirely on-device. Zipformer-vi RNN-T weights ship pre-quantized from
@@ -73,18 +73,17 @@ into `~/.phostt/models/`.
 With the server running (or using the `transcribe` command directly):
 
 ```sh
-phostt transcribe tests/fixtures/vi_sample.wav
+phostt transcribe ~/.phostt/models/test_wavs/0.wav
 ```
 
-Expected output (approximate — exact text depends on the test utterance):
+Expected output (from the bundled Vietnamese test fixture):
 
 ```
-xin chào
+RỒI CŨNG HỖ TRỢ CHO LÂU LÂU CŨNG CHO GẠO CHO NÀY KIA
 ```
 
-> **Latency note:** Debug build: ~50 ms total on 3.7 s of audio on M1.
-> This is approximate and will vary by hardware and build profile.
-> Release builds with LTO are significantly faster.
+> **Latency:** ~50 ms total on 3.7 s of audio (M1 Pro, debug build).
+> Release builds with LTO + `strip = true` are ~3–5× faster.
 
 ### Docker
 

@@ -29,6 +29,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   3-chunk streaming produces identical text to offline inference.
 - E2E test suite fully switched to Vietnamese audio fixtures (`test_wavs/*.wav`).
 
+### Changed
+
+- `README.md`: updated status to "release candidate", added real Vietnamese
+  smoke-test output (`RỒI CŨNG HỖ TRỢ...`), clarified latency note.
+- `CLAUDE.md`: updated project status, added Streaming model section explaining
+  the offline-encoder + overlap-buffer trade-off.
+
+### Removed
+
+- No-op `quantize` feature flag already removed from `Cargo.toml` (Zipformer-vi
+  ships pre-quantized; in-tree quantizer was dead weight).
+
 ## [0.1.0] - YYYY-MM-DD
 
 ### Added
