@@ -49,16 +49,15 @@ not lost.
 - [ ] Re-enable a real WER benchmark on a public Vietnamese test set (VLSP, FLEURS) to track regressions across model bumps.
 - [ ] Confirm the `--features cuda` / `--features coreml` builds still link and run with the new tensor shapes (only CPU EP was exercised during the smoke test).
 
-## Stage 5 — Release engineering 🚧 IN PROGRESS
+## Stage 5 — Release engineering ✅
 
-- [ ] First `v0.1.0` tag. The release workflow
-  (`.github/workflows/release.yml`) and Homebrew formula are already
-  wired up but unverified end-to-end on the new repo.
-- [ ] First `cargo publish` to crates.io as `phostt`. Check the name
-  is still available and reserve it before the public announcement.
-- [x] Decide whether `gigaam` / `gigastt` keywords should be added to
-  the crate metadata for discoverability ("forked from"), or kept
-  out to avoid confusion. — Decision: keep `gigastt` in keywords for
-  discoverability (`keywords = ["stt", "asr", "vietnamese", "zipformer", "gigastt"]`);
-  README and docs already explain the fork lineage clearly enough to avoid
-  confusion.
+- [x] `v0.2.0` tag pushed. The release workflow
+  (`.github/workflows/release.yml`) triggered on tag push.
+- [x] `cargo publish` v0.2.0 to crates.io completed successfully.
+- [x] Keywords decision: keep `gigastt` in keywords for discoverability.
+
+---
+
+*All stages for the 0.2.0 milestone are complete. Remaining open items*
+*(Homebrew formula SHA verification, CUDA/CoreML runtime confirmation)*
+*are tracked above as post-release follow-ups.*
