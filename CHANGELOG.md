@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Pool::checkout_blocking` synchronous pool checkout for FFI consumers.
 - `Engine::transcribe_samples` made public (exposed to FFI).
 - `ffi` Cargo feature pulling in `ort/nnapi` for Android NPU/DSP acceleration.
+- Streaming wrapper fully wired: `OnlineFeature` with sliding 4 s window +
+  1 s overlap, overlap-merge word deduplication, `input_finished()` flush on
+  endpoint / stop / close. Unit test `test_streaming_matches_offline` confirms
+  3-chunk streaming produces identical text to offline inference.
+- E2E test suite fully switched to Vietnamese audio fixtures (`test_wavs/*.wav`).
 
 ## [0.1.0] - YYYY-MM-DD
 

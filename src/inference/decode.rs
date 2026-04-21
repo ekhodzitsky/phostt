@@ -15,7 +15,7 @@ use super::{CONTEXT_SIZE, DECODER_OUT_DIM, DecoderState, ENCODER_OUT_DIM};
 
 const MAX_TOKENS_PER_STEP: usize = 10;
 /// Number of consecutive blank encoder frames that flip the engine into
-/// "speech ended" — same threshold the legacy GigaAM pipeline used.
+/// "speech ended" — same threshold used by the Zipformer-vi pipeline.
 pub(crate) const ENDPOINT_BLANK_THRESHOLD: usize = 15;
 
 /// Token emitted by the decoder with metadata.
