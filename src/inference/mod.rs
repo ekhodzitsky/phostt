@@ -338,19 +338,12 @@ pub struct Engine {
     pub pool: SessionPool,
     tokenizer: Tokenizer,
     mel: MelSpectrogram,
-    /// Whether the INT8 quantized encoder is in use.
-    int8: bool,
     /// Speaker encoder for diarization (None if model file is absent).
     #[cfg(feature = "diarization")]
     pub speaker_encoder: Option<diarization::SpeakerEncoder>,
 }
 
 impl Engine {
-    /// Whether the INT8 quantized encoder is loaded.
-    pub fn is_int8(&self) -> bool {
-        self.int8
-    }
-
     /// Size of the BPE vocabulary the loaded tokenizer covers. Exposed so the
     /// REST `/v1/models` handler can report the real value instead of a
     /// hardcoded literal that would drift if the upstream model rev changes.
@@ -361,8 +354,9 @@ impl Engine {
     /// Load ONNX models from the given directory and create an inference engine.
     ///
     /// Creates a pool of [`DEFAULT_POOL_SIZE`] session triplets for concurrent inference.
-    /// Expects files: `v3_e2e_rnnt_encoder.onnx` (or `_int8.onnx`), `v3_e2e_rnnt_decoder.onnx`,
-    /// `v3_e2e_rnnt_joint.onnx`, and `v3_e2e_rnnt_vocab.txt`.
+    /// Expects files: `encoder.int8.onnx`, `decoder.onnx`, `joiner.int8.onnx`,
+    /// `bpe.model`, and `tokens.txt` — the layout published by sherpa-onnx in
+    /// `sherpa-onnx-zipformer-vi-30M-int8-2026-02-09.tar.bz2`.
     ///
     /// # Errors
     ///
@@ -374,9 +368,9 @@ impl Engine {
     /// Load ONNX models with a custom pool size.
     pub fn load_with_pool_size(model_dir: &str, pool_size: usize) -> Result<Self, GigasttError> {
         let dir = Path::new(model_dir);
-        if !dir.join("v3_e2e_rnnt_encoder.onnx").exists() {
+        if !dir.join("encoder.int8.onnx").exists() {
             return Err(GigasttError::ModelLoad(format!(
-                "v3_e2e_rnnt_encoder.onnx not found in {model_dir}"
+                "encoder.int8.onnx not found in {model_dir}"
             )));
         }
         Self::load_inner(dir, model_dir, pool_size)
@@ -388,11 +382,8 @@ impl Engine {
         dir: &Path,
         prepacked: &ort::session::builder::PrepackedWeights,
     ) -> anyhow::Result<(Session, Session, Session)> {
-        let encoder_path = if dir.join("v3_e2e_rnnt_encoder_int8.onnx").exists() {
-            dir.join("v3_e2e_rnnt_encoder_int8.onnx")
-        } else {
-            dir.join("v3_e2e_rnnt_encoder.onnx")
-        };
+        // Zipformer-vi ships pre-quantized — there is no FP32 fallback to choose.
+        let encoder_path = dir.join("encoder.int8.onnx");
 
         #[cfg(feature = "coreml")]
         let (encoder, decoder, joiner) = {
@@ -423,7 +414,7 @@ impl Engine {
                 .map_err(ort_err)?
                 .with_execution_providers([coreml_ep.clone()])
                 .map_err(ort_err)?
-                .commit_from_file(dir.join("v3_e2e_rnnt_decoder.onnx"))
+                .commit_from_file(dir.join("decoder.onnx"))
                 .map_err(ort_err)?;
             let joiner = Session::builder()
                 .map_err(ort_err)?
@@ -431,7 +422,7 @@ impl Engine {
                 .map_err(ort_err)?
                 .with_execution_providers([coreml_ep])
                 .map_err(ort_err)?
-                .commit_from_file(dir.join("v3_e2e_rnnt_joint.onnx"))
+                .commit_from_file(dir.join("joiner.int8.onnx"))
                 .map_err(ort_err)?;
             (encoder, decoder, joiner)
         };
@@ -458,7 +449,7 @@ impl Engine {
                 .map_err(ort_err)?
                 .with_execution_providers([cuda_ep.clone()])
                 .map_err(ort_err)?
-                .commit_from_file(dir.join("v3_e2e_rnnt_decoder.onnx"))
+                .commit_from_file(dir.join("decoder.onnx"))
                 .map_err(ort_err)?;
             let joiner = Session::builder()
                 .map_err(ort_err)?
@@ -466,7 +457,7 @@ impl Engine {
                 .map_err(ort_err)?
                 .with_execution_providers([cuda_ep])
                 .map_err(ort_err)?
-                .commit_from_file(dir.join("v3_e2e_rnnt_joint.onnx"))
+                .commit_from_file(dir.join("joiner.int8.onnx"))
                 .map_err(ort_err)?;
             (encoder, decoder, joiner)
         };
@@ -487,13 +478,13 @@ impl Engine {
                 .map_err(ort_err)?
                 .with_prepacked_weights(prepacked)
                 .map_err(ort_err)?
-                .commit_from_file(dir.join("v3_e2e_rnnt_decoder.onnx"))
+                .commit_from_file(dir.join("decoder.onnx"))
                 .map_err(ort_err)?;
             let joiner = Session::builder()
                 .map_err(ort_err)?
                 .with_prepacked_weights(prepacked)
                 .map_err(ort_err)?
-                .commit_from_file(dir.join("v3_e2e_rnnt_joint.onnx"))
+                .commit_from_file(dir.join("joiner.int8.onnx"))
                 .map_err(ort_err)?;
             (encoder, decoder, joiner)
         };
@@ -502,12 +493,7 @@ impl Engine {
     }
 
     fn load_inner(dir: &Path, model_dir: &str, pool_size: usize) -> anyhow::Result<Self> {
-        let is_int8 = dir.join("v3_e2e_rnnt_encoder_int8.onnx").exists();
-        if is_int8 {
-            tracing::info!("Using INT8 quantized encoder");
-        }
-
-        tracing::info!("Loading ONNX models from {model_dir} (pool_size={pool_size})...");
+        tracing::info!("Loading Zipformer-vi INT8 ONNX models from {model_dir} (pool_size={pool_size})...");
 
         #[cfg(feature = "coreml")]
         tracing::info!("Using CoreML execution provider (Neural Engine + CPU)");
@@ -543,7 +529,7 @@ impl Engine {
                 .collect::<anyhow::Result<Vec<_>>>()
         })?;
 
-        let tokenizer = Tokenizer::load(&dir.join("v3_e2e_rnnt_vocab.txt"))?;
+        let tokenizer = Tokenizer::load(&dir.join("tokens.txt"))?;
         let mel = MelSpectrogram::new();
 
         tracing::info!(
@@ -567,7 +553,6 @@ impl Engine {
             pool: SessionPool::new(triplets),
             tokenizer,
             mel,
-            int8: is_int8,
             #[cfg(feature = "diarization")]
             speaker_encoder,
         })

@@ -30,7 +30,7 @@ pub fn model_dir() -> String {
         .join(".phostt")
         .join("models");
     assert!(
-        dir.join("v3_e2e_rnnt_encoder.onnx").exists(),
+        dir.join("encoder.int8.onnx").exists(),
         "Model not found at {}. Run `cargo run -- download` first.",
         dir.display()
     );

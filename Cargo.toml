@@ -68,6 +68,12 @@ tokio-util = { version = "0.7", features = ["rt"] }
 # Audio file reading (for `transcribe` command)
 symphonia = { version = "0.5", features = ["aac", "isomp4", "mp3", "ogg", "flac", "pcm", "wav"] }
 
+# Bundle extraction for the upstream sherpa-onnx Zipformer-vi release tarball
+# (`*.tar.bz2`). `bzip2` links against system libbz2 (preinstalled on macOS,
+# `libbz2-dev` on Debian); `tar` is pure Rust.
+tar = "0.4"
+bzip2 = "0.6"
+
 # Explicit pin for zero-copy byte buffers shared with symphonia (used by the
 # REST upload decode path). Already transitive via axum/tokio; pinning makes
 # the dependency direct so the zero-copy decode contract is discoverable.

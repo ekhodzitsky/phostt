@@ -157,11 +157,7 @@ pub async fn models(State(state): State<Arc<AppState>>) -> Json<ModelInfo> {
         id: "zipformer-vi-rnnt".into(),
         name: "Zipformer-vi RNN-T".into(),
         version: env!("CARGO_PKG_VERSION").into(),
-        encoder: if engine.is_int8() {
-            "int8".into()
-        } else {
-            "fp32".into()
-        },
+        encoder: "int8".into(),
         vocab_size: engine.vocab_size(),
         sample_rate: 16000,
         pool_size: engine.pool.total(),

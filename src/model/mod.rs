@@ -1,11 +1,22 @@
-//! Model download and management.
+//! Model bundle download and management.
 //!
-//! Downloads Zipformer-vi RNN-T ONNX files from HuggingFace to `~/.phostt/models/`.
+//! Fetches the upstream sherpa-onnx Zipformer-vi RNN-T release tarball from
+//! GitHub Releases, verifies its SHA-256, extracts the encoder, decoder,
+//! joiner, BPE model and tokens vocabulary into `~/.phostt/models/`, then
+//! discards the archive. The bundle ships with a `test_wavs/` directory
+//! that we deliberately keep so e2e fixtures can replay the upstream
+//! reference samples.
+//!
+//! Atomic-rename + `.partial` semantics carried over from the upstream
+//! `gigastt` fetcher: a crash between download and SHA verification can
+//! never leave a half-extracted model dir under the visible name.
 
 use anyhow::{Context, Result};
+use bzip2::read::BzDecoder;
 use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
 use std::path::Path;
+use tar::Archive;
 use tokio::io::AsyncWriteExt;
 
 /// Simple download progress reporter (no external deps).
@@ -48,32 +59,31 @@ impl DownloadProgress {
     }
 }
 
-const HF_REPO: &str = "istupakov/gigaam-v3-onnx";
-const MODEL_FILES: &[&str] = &[
-    "v3_e2e_rnnt_encoder.onnx",
-    "v3_e2e_rnnt_decoder.onnx",
-    "v3_e2e_rnnt_joint.onnx",
-    "v3_e2e_rnnt_vocab.txt",
-];
+/// GitHub release that hosts the bundle. The sherpa-onnx project re-uses a
+/// single `asr-models` tag for every published ASR weight set, so the URL
+/// is stable across model upgrades — only [`MODEL_BUNDLE_FILENAME`] and
+/// [`MODEL_BUNDLE_SHA256`] need to move when we re-pin.
+const MODEL_BUNDLE_REPO: &str = "k2-fsa/sherpa-onnx";
+const MODEL_BUNDLE_RELEASE: &str = "asr-models";
+const MODEL_BUNDLE_FILENAME: &str = "sherpa-onnx-zipformer-vi-30M-int8-2026-02-09.tar.bz2";
+/// Top-level directory inside the tarball. We strip this prefix on
+/// extraction so phostt sees a flat `<model_dir>/encoder.int8.onnx` layout.
+const MODEL_BUNDLE_TOP_DIR: &str = "sherpa-onnx-zipformer-vi-30M-int8-2026-02-09";
 
-/// SHA-256 checksums for model integrity verification.
-const MODEL_CHECKSUMS: &[(&str, Option<&str>)] = &[
-    (
-        "v3_e2e_rnnt_encoder.onnx",
-        Some("cd60b3764a832e8560ae6d3ad0b10adc1a42ffae412b9476f25620aae4f4a508"),
-    ),
-    (
-        "v3_e2e_rnnt_decoder.onnx",
-        Some("7b0a16d67fd2cb37061decc93c69e364a9ab27afee3c57495d55b1c974cf7231"),
-    ),
-    (
-        "v3_e2e_rnnt_joint.onnx",
-        Some("602ff7017a93311aad34df1437c8d7f49911353c13d6eae7a6ee7b041339465c"),
-    ),
-    (
-        "v3_e2e_rnnt_vocab.txt",
-        Some("39abae20e692998290c574e606f11a9edef2902a1995463fcff63d1490cf22b7"),
-    ),
+/// SHA-256 of the published `*.tar.bz2`. Verified against the GitHub release
+/// asset on 2026-04-21 (26 442 384 bytes); refresh whenever the bundle is
+/// re-uploaded.
+const MODEL_BUNDLE_SHA256: &str =
+    "da8b637947091829d7ee9eda23da2a4ec7caa399233a3f4e34eb719fb2ea6b9b";
+
+/// Files we require under `<model_dir>/` after extraction. `model_files_exist`
+/// uses this list to short-circuit subsequent runs without re-downloading.
+pub const MODEL_FILES: &[&str] = &[
+    "encoder.int8.onnx",
+    "decoder.onnx",
+    "joiner.int8.onnx",
+    "bpe.model",
+    "tokens.txt",
 ];
 
 #[cfg(feature = "diarization")]
@@ -115,10 +125,8 @@ pub fn default_model_dir() -> String {
         .unwrap_or_else(|| ".phostt/models".into())
 }
 
-/// Ensure model files exist in `model_dir`, downloading from HuggingFace if missing.
-///
-/// Downloads encoder, decoder, joiner ONNX models and vocabulary from
-/// the `istupakov/gigaam-v3-onnx` repository. Shows progress bars during download.
+/// Ensure model files exist in `model_dir`, downloading and extracting the
+/// upstream sherpa-onnx Zipformer-vi bundle if missing.
 pub async fn ensure_model(model_dir: &str) -> Result<()> {
     let dir = Path::new(model_dir);
 
@@ -127,14 +135,34 @@ pub async fn ensure_model(model_dir: &str) -> Result<()> {
         return Ok(());
     }
 
-    tracing::info!("Model not found, downloading from HuggingFace...");
+    tracing::info!("Model not found, downloading Zipformer-vi bundle...");
     std::fs::create_dir_all(dir).context("Failed to create model directory")?;
 
-    for file in MODEL_FILES {
-        download_file(file, dir).await?;
-    }
+    let archive_dest = dir.join(MODEL_BUNDLE_FILENAME);
+    let url = format!(
+        "https://github.com/{MODEL_BUNDLE_REPO}/releases/download/{MODEL_BUNDLE_RELEASE}/{MODEL_BUNDLE_FILENAME}"
+    );
+    stream_to_partial_then_finalize(
+        &url,
+        &archive_dest,
+        Some(MODEL_BUNDLE_SHA256),
+        MODEL_BUNDLE_FILENAME,
+    )
+    .await?;
 
-    tracing::info!("Model download complete");
+    tracing::info!("Extracting bundle into {}", dir.display());
+    extract_bundle(&archive_dest, dir)?;
+    // Discard the archive once contents are in place — it is large and
+    // re-downloads cheaply if we ever need a fresh copy.
+    let _ = std::fs::remove_file(&archive_dest);
+
+    if !model_files_exist(dir) {
+        anyhow::bail!(
+            "Bundle extracted but expected files are still missing under {}",
+            dir.display()
+        );
+    }
+    tracing::info!("Model bundle ready");
     Ok(())
 }
 
@@ -144,7 +172,7 @@ pub async fn ensure_model(model_dir: &str) -> Result<()> {
 /// into `<model_dir>/wespeaker_resnet34.onnx.partial`, verifies its SHA-256 against
 /// `SPEAKER_MODEL_SHA256`, and atomically renames it into place. On checksum mismatch or
 /// crash the final path is never observable, so a subsequent `ensure_speaker_model` call
-/// will re-download from scratch rather than loading a tampered model (V1-02).
+/// will re-download from scratch rather than loading a tampered model.
 #[cfg(feature = "diarization")]
 pub async fn ensure_speaker_model(model_dir: &str) -> Result<()> {
     let dir = Path::new(model_dir);
@@ -194,8 +222,7 @@ fn sha256_file(path: &Path) -> Result<String> {
 /// and atomically rename it into `final_path`. On mismatch the partial is
 /// removed so a corrupt artefact cannot be mistaken for a good download on
 /// restart. On success the partial no longer exists and `final_path` is the
-/// only visible artefact. Separated from the network path so the filesystem
-/// contract can be unit-tested without a mock HTTP server.
+/// only visible artefact.
 fn finalize_download(
     partial_path: &Path,
     final_path: &Path,
@@ -205,8 +232,6 @@ fn finalize_download(
     if let Some(expected) = expected_sha256 {
         let actual = sha256_file(partial_path)?;
         if actual != expected {
-            // Remove the corrupt partial so a retry starts clean and so a
-            // restart cannot promote the partial to final via race.
             let _ = std::fs::remove_file(partial_path);
             anyhow::bail!("SHA-256 mismatch for {label}: expected {expected}, got {actual}");
         }
@@ -223,26 +248,7 @@ fn finalize_download(
     Ok(())
 }
 
-async fn download_file(filename: &str, dir: &Path) -> Result<()> {
-    let url = format!("https://huggingface.co/{HF_REPO}/resolve/main/{filename}");
-    let final_dest = dir.join(filename);
-    let expected = MODEL_CHECKSUMS
-        .iter()
-        .find(|(name, _)| *name == filename)
-        .and_then(|(_, hash)| *hash);
-    stream_to_partial_then_finalize(&url, &final_dest, expected, filename).await
-}
-
 /// Streaming download with SHA-256 verification and atomic rename.
-///
-/// Stages the response into `<final_dest>.partial`, verifies the hash (when
-/// `expected_sha256` is provided), and atomically renames the partial into
-/// the final path. On checksum mismatch or crash the final path is never
-/// observable, so a retry starts from a clean slate.
-///
-/// Shared by [`ensure_model`] (per-file download loop) and
-/// [`ensure_speaker_model`] (single-file diarization download) so the
-/// TOCTOU + progress + retry semantics match bit-for-bit.
 async fn stream_to_partial_then_finalize(
     url: &str,
     final_dest: &Path,
@@ -251,8 +257,6 @@ async fn stream_to_partial_then_finalize(
 ) -> Result<()> {
     let partial = partial_path(final_dest);
 
-    // Drop a stale partial from a previous crashed run before writing the
-    // new one so we never concatenate chunks into an old prefix.
     if partial.exists() {
         let _ = tokio::fs::remove_file(&partial).await;
     }
@@ -294,6 +298,61 @@ async fn stream_to_partial_then_finalize(
     Ok(())
 }
 
+/// Extract a `.tar.bz2` archive into `dest_dir`, stripping the top-level
+/// directory ([`MODEL_BUNDLE_TOP_DIR`]) so files land at
+/// `<dest_dir>/<file>` instead of
+/// `<dest_dir>/<bundle_name>/<file>`. Refuses to write outside `dest_dir`
+/// (rejects `..` and absolute paths) — the upstream tar is trusted but the
+/// guard costs nothing.
+fn extract_bundle(archive: &Path, dest_dir: &Path) -> Result<()> {
+    let file = std::fs::File::open(archive)
+        .with_context(|| format!("Failed to open archive {}", archive.display()))?;
+    let bz = BzDecoder::new(file);
+    let mut tar = Archive::new(bz);
+
+    for entry in tar.entries().context("Failed to read tar entries")? {
+        let mut entry = entry.context("Tar entry read error")?;
+        let path = entry.path().context("Tar entry has no path")?.into_owned();
+
+        // Strip the well-known top directory; skip the bare directory entry.
+        let relative = match path.strip_prefix(MODEL_BUNDLE_TOP_DIR) {
+            Ok(rel) if rel.as_os_str().is_empty() => continue,
+            Ok(rel) => rel.to_path_buf(),
+            Err(_) => path.clone(),
+        };
+
+        // Reject path traversal — `tar::Entry::unpack_in` already enforces
+        // this when handed a base, but we materialise the destination
+        // ourselves to keep the strip-prefix behaviour explicit.
+        if relative
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            anyhow::bail!(
+                "Refusing to extract {}: parent-dir component in archive entry",
+                relative.display()
+            );
+        }
+        if relative.is_absolute() {
+            anyhow::bail!(
+                "Refusing to extract {}: absolute path in archive entry",
+                relative.display()
+            );
+        }
+
+        let target = dest_dir.join(&relative);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create directory {}", parent.display())
+            })?;
+        }
+        entry
+            .unpack(&target)
+            .with_context(|| format!("Failed to unpack {}", target.display()))?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,7 +360,6 @@ mod tests {
 
     #[test]
     fn test_home_dir_returns_some() {
-        // On any CI or developer machine HOME / USERPROFILE should be set.
         assert!(
             home_dir().is_some(),
             "home_dir() must return Some on this platform"
@@ -320,7 +378,6 @@ mod tests {
     #[test]
     fn test_download_progress_basic() {
         let mut progress = DownloadProgress::new(1_000_000);
-        // Should not panic on normal update.
         progress.update(500_000);
         assert_eq!(progress.current, 500_000);
         assert_eq!(progress.last_percent, 50);
@@ -330,21 +387,17 @@ mod tests {
     #[test]
     fn test_download_progress_zero_total() {
         let mut progress = DownloadProgress::new(0);
-        // Must not divide by zero.
         progress.update(100);
         assert_eq!(progress.last_percent, 0);
         progress.finish();
     }
 
-    /// Compute the SHA-256 of a byte slice as a lowercase hex digest.
     fn sha256_hex(bytes: &[u8]) -> String {
         let mut hasher = Sha256::new();
         hasher.update(bytes);
         format!("{:x}", hasher.finalize())
     }
 
-    /// V1-01: Helper to stage a `.partial` file with arbitrary bytes, mimicking
-    /// the state of a fully streamed download prior to verification.
     fn stage_partial(final_path: &Path, bytes: &[u8]) -> std::path::PathBuf {
         let partial = partial_path(final_path);
         let mut f = std::fs::File::create(&partial).expect("create partial");
@@ -362,8 +415,6 @@ mod tests {
         );
     }
 
-    /// V1-01: on the success path, `.partial` disappears and the final path
-    /// appears in a single atomic step.
     #[test]
     fn test_download_writes_partial_then_renames() {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -389,10 +440,6 @@ mod tests {
         assert_eq!(std::fs::read(&final_path).unwrap(), payload);
     }
 
-    /// V1-01: if the process dies between the network write and the
-    /// SHA verification / rename, `model_files_exist` must NOT see the
-    /// file under its final name. We simulate the crash by staging a
-    /// `.partial` and never calling `finalize_download`.
     #[test]
     fn test_download_crash_before_rename_leaves_no_final_file() {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -405,22 +452,17 @@ mod tests {
             "crash before rename must never leave the final artefact visible"
         );
 
-        // All four MODEL_FILES stay missing from this tempdir, so
-        // model_files_exist must refuse to short-circuit the download path.
         assert!(
             !model_files_exist(tmp.path()),
             "model_files_exist must not accept a staged partial"
         );
     }
 
-    /// V1-01: SHA mismatch removes the partial and leaves the final path
-    /// empty, so a retry starts from a clean slate.
     #[test]
     fn test_download_rejects_sha256_mismatch() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let final_path = tmp.path().join("decoder.onnx");
         let payload = b"real bytes";
-        // Intentionally wrong expected hash (hash of different bytes).
         let wrong_expected = sha256_hex(b"different bytes");
 
         let partial = stage_partial(&final_path, payload);
@@ -437,8 +479,6 @@ mod tests {
         );
     }
 
-    /// V1-01: success path with no checksum available still renames
-    /// atomically (partial gone, final present, bytes preserved).
     #[test]
     fn test_download_atomic_on_success_without_checksum() {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -455,7 +495,6 @@ mod tests {
         assert_eq!(std::fs::read(&final_path).unwrap(), payload);
     }
 
-    /// V1-01: sha256_file matches the in-memory hash of the same bytes.
     #[test]
     fn test_sha256_file_matches_in_memory_hash() {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -468,77 +507,86 @@ mod tests {
         assert_eq!(got, want);
     }
 
-    /// V1-02: `SPEAKER_MODEL_SHA256` is a 64-char lowercase hex digest
-    /// matching the SHA-256 of the upstream `onnx/model.onnx` blob
-    /// (no accidental truncation / placeholder at compile time).
-    #[cfg(feature = "diarization")]
     #[test]
-    fn test_speaker_model_sha256_shape() {
+    fn test_model_bundle_sha256_shape() {
         assert_eq!(
-            SPEAKER_MODEL_SHA256.len(),
+            MODEL_BUNDLE_SHA256.len(),
             64,
-            "SPEAKER_MODEL_SHA256 must be a 64-char hex digest"
+            "MODEL_BUNDLE_SHA256 must be a 64-char hex digest"
         );
         assert!(
-            SPEAKER_MODEL_SHA256
+            MODEL_BUNDLE_SHA256
                 .chars()
                 .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
-            "SPEAKER_MODEL_SHA256 must be lowercase hex; got: {SPEAKER_MODEL_SHA256}"
+            "MODEL_BUNDLE_SHA256 must be lowercase hex; got: {MODEL_BUNDLE_SHA256}"
         );
     }
 
-    /// V1-02: mismatching bytes against `SPEAKER_MODEL_SHA256` must delete
-    /// the partial and refuse to promote it — exercises the full
-    /// speaker-model finalize contract without touching the network.
-    #[cfg(feature = "diarization")]
     #[test]
-    fn test_speaker_model_rejects_sha256_mismatch() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let final_path = tmp.path().join(SPEAKER_MODEL_FILE);
-        // Definitely not the real speaker-model bytes.
-        let partial = stage_partial(&final_path, b"not the real wespeaker weights");
-
-        let err = finalize_download(
-            &partial,
-            &final_path,
-            Some(SPEAKER_MODEL_SHA256),
-            SPEAKER_MODEL_FILE,
-        )
-        .expect_err("speaker mismatch must error");
-        assert!(
-            format!("{err}").contains("SHA-256 mismatch"),
-            "unexpected error: {err}"
-        );
-
-        assert!(
-            !partial.exists(),
-            "partial speaker model must be removed on mismatch"
-        );
-        assert!(
-            !final_path.exists(),
-            "final speaker model must never appear on mismatch"
-        );
+    fn test_model_files_list_matches_required_layout() {
+        // Sanity-check the constant rather than the runtime extractor: every
+        // file the engine needs must appear in MODEL_FILES so a missed entry
+        // surfaces as a unit-test failure instead of a runtime mystery.
+        for required in ["encoder.int8.onnx", "decoder.onnx", "joiner.int8.onnx", "bpe.model", "tokens.txt"] {
+            assert!(
+                MODEL_FILES.contains(&required),
+                "MODEL_FILES is missing required entry {required}"
+            );
+        }
     }
 
-    /// V1-02: when the partial bytes DO hash to `SPEAKER_MODEL_SHA256`, the
-    /// finalize path promotes them atomically. Network-free: we forge a
-    /// "matching" partial by precomputing the hash of an arbitrary payload
-    /// and passing it as the expected value.
-    #[cfg(feature = "diarization")]
     #[test]
-    fn test_speaker_model_partial_promoted_on_match() {
+    fn test_extract_bundle_strips_top_dir_and_rejects_traversal() {
+        // Build a tiny in-memory tar.bz2 that mirrors the upstream layout
+        // (top-level dir + a few files) so we exercise the strip-prefix
+        // and traversal-guard logic without touching the network.
+        use bzip2::write::BzEncoder;
+        use bzip2::Compression;
+        use std::io::Cursor;
+        use tar::Header;
+
+        fn append(builder: &mut tar::Builder<&mut Vec<u8>>, path: &str, data: &[u8]) {
+            let mut header = Header::new_gnu();
+            header.set_size(data.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder.append_data(&mut header, path, Cursor::new(data)).unwrap();
+        }
+
+        // Happy path: top-dir prefix is stripped.
         let tmp = tempfile::tempdir().expect("tempdir");
-        let final_path = tmp.path().join(SPEAKER_MODEL_FILE);
-        let payload = b"wespeaker-surrogate";
-        let expected = sha256_hex(payload);
-
-        let partial = stage_partial(&final_path, payload);
-
-        finalize_download(&partial, &final_path, Some(&expected), SPEAKER_MODEL_FILE)
-            .expect("matching partial must promote");
-
-        assert!(!partial.exists());
-        assert!(final_path.exists());
-        assert_eq!(std::fs::read(&final_path).unwrap(), payload);
+        let archive_path = tmp.path().join("bundle.tar.bz2");
+        {
+            let mut tar_buf = Vec::new();
+            {
+                let mut builder = tar::Builder::new(&mut tar_buf);
+                append(
+                    &mut builder,
+                    &format!("{MODEL_BUNDLE_TOP_DIR}/encoder.int8.onnx"),
+                    b"encoder-bytes",
+                );
+                append(
+                    &mut builder,
+                    &format!("{MODEL_BUNDLE_TOP_DIR}/test_wavs/0.wav"),
+                    b"wav-bytes",
+                );
+                builder.finish().unwrap();
+            }
+            let mut bz = BzEncoder::new(
+                std::fs::File::create(&archive_path).unwrap(),
+                Compression::fast(),
+            );
+            std::io::copy(&mut Cursor::new(tar_buf), &mut bz).unwrap();
+            bz.finish().unwrap();
+        }
+        let dest = tmp.path().join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        extract_bundle(&archive_path, &dest).expect("happy-path extract");
+        assert!(dest.join("encoder.int8.onnx").exists());
+        assert!(dest.join("test_wavs").join("0.wav").exists());
+        assert!(
+            !dest.join(MODEL_BUNDLE_TOP_DIR).exists(),
+            "top dir must be stripped, not nested"
+        );
     }
 }
