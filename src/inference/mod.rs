@@ -21,6 +21,7 @@ use ort::value::TensorRef;
 use serde::Serialize;
 use std::ops::{Deref, DerefMut};
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::error::GigasttError;
 
@@ -356,9 +357,11 @@ pub struct StreamingState {
     /// Number of mel frames already consumed from `online`.
     pub frames_seen: usize,
     /// Accumulated transcript text across chunks (reset on endpointing).
-    pub accumulated_text: String,
+    /// Arc allows O(1) clone when emitting partial segments.
+    pub accumulated_text: Arc<String>,
     /// Accumulated words with timestamps (reset on endpointing).
-    pub accumulated_words: Vec<WordInfo>,
+    /// Arc allows O(1) clone when emitting partial segments.
+    pub accumulated_words: Arc<Vec<WordInfo>>,
     /// Absolute encoder frame offset for the next window (after subsampling-by-4).
     pub total_frames: usize,
     /// Mel feature frames waiting to fill the next streaming window.
@@ -650,8 +653,8 @@ impl Engine {
             decoder: DecoderState::new(self.tokenizer.blank_id()),
             online,
             frames_seen: 0,
-            accumulated_text: String::new(),
-            accumulated_words: Vec::new(),
+            accumulated_text: Arc::new(String::new()),
+            accumulated_words: Arc::new(Vec::new()),
             total_frames: 0,
             feature_window: Vec::new(),
             prev_window_words: Vec::new(),
@@ -765,23 +768,25 @@ impl Engine {
             return Ok(vec![]);
         }
 
-        // Accumulate new words
+        // Accumulate new words — make_mut clones only if refcount > 1
+        let acc_text = Arc::make_mut(&mut state.accumulated_text);
+        let acc_words = Arc::make_mut(&mut state.accumulated_words);
         for w in &emitted_words {
-            if !state.accumulated_text.is_empty() {
-                state.accumulated_text.push(' ');
+            if !acc_text.is_empty() {
+                acc_text.push(' ');
             }
-            state.accumulated_text.push_str(&w.word);
+            acc_text.push_str(&w.word);
         }
-        state.accumulated_words.extend(emitted_words);
+        acc_words.extend(emitted_words);
 
-        let text = state.accumulated_text.clone();
-        let words = state.accumulated_words.clone();
+        let text = Arc::clone(&state.accumulated_text);
+        let words = Arc::clone(&state.accumulated_words);
         let ts = now_timestamp();
 
         if endpoint {
             // Endpoint detected: emit Final and reset accumulation
-            state.accumulated_text.clear();
-            state.accumulated_words.clear();
+            state.accumulated_text = Arc::new(String::new());
+            state.accumulated_words = Arc::new(Vec::new());
             state.decoder.consecutive_blanks = 0;
             state.prev_window_words.clear();
             Ok(vec![TranscriptSegment {
@@ -825,13 +830,15 @@ impl Engine {
                 .run_inference(triplet, features, num_frames, &mut state.decoder, frame_offset)
                 .ok()?;
             let delta = Self::delta_words(&window_words, &state.prev_window_words);
+            let acc_text = Arc::make_mut(&mut state.accumulated_text);
+            let acc_words = Arc::make_mut(&mut state.accumulated_words);
             for w in &delta {
-                if !state.accumulated_text.is_empty() {
-                    state.accumulated_text.push(' ');
+                if !acc_text.is_empty() {
+                    acc_text.push(' ');
                 }
-                state.accumulated_text.push_str(&w.word);
+                acc_text.push_str(&w.word);
             }
-            state.accumulated_words.extend(delta);
+            acc_words.extend(delta);
             state.prev_window_words = window_words;
             state.feature_window.clear();
             state.total_frames += num_frames / 4;
@@ -841,8 +848,8 @@ impl Engine {
             return None;
         }
         let seg = TranscriptSegment {
-            text: std::mem::take(&mut state.accumulated_text),
-            words: std::mem::take(&mut state.accumulated_words),
+            text: Arc::clone(&state.accumulated_text),
+            words: Arc::clone(&state.accumulated_words),
             is_final: true,
             timestamp: now_timestamp(),
         };
@@ -1116,9 +1123,9 @@ pub struct TranscribeResult {
 #[non_exhaustive]
 pub struct TranscriptSegment {
     /// Recognized text for this segment.
-    pub text: String,
+    pub text: Arc<String>,
     /// Individual words with timing and confidence metadata.
-    pub words: Vec<WordInfo>,
+    pub words: Arc<Vec<WordInfo>>,
     /// Whether this segment is final (utterance complete) or partial (interim).
     pub is_final: bool,
     /// Unix timestamp (seconds since epoch) when this segment was produced.

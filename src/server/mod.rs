@@ -815,15 +815,15 @@ async fn handle_binary_frame(
             for seg in segments {
                 let msg = if seg.is_final {
                     ServerMessage::Final {
-                        text: seg.text,
+                        text: seg.text.to_string(),
                         timestamp: seg.timestamp,
-                        words: seg.words,
+                        words: seg.words.to_vec(),
                     }
                 } else {
                     ServerMessage::Partial {
-                        text: seg.text,
+                        text: seg.text.to_string(),
                         timestamp: seg.timestamp,
-                        words: seg.words,
+                        words: seg.words.to_vec(),
                     }
                 };
                 send_server_message(sink, &msg).await?;
@@ -950,9 +950,9 @@ async fn handle_stop_message(
     *triplet_opt = Some(triplet);
     let final_msg = if let Some(seg) = flush_seg {
         ServerMessage::Final {
-            text: seg.text,
+            text: seg.text.to_string(),
             timestamp: seg.timestamp,
-            words: seg.words,
+            words: seg.words.to_vec(),
         }
     } else {
         ServerMessage::Final {
@@ -989,9 +989,9 @@ async fn flush_and_final(
     *triplet_opt = Some(triplet);
     let final_msg = match flush_seg {
         Some(seg) => ServerMessage::Final {
-            text: seg.text,
+            text: seg.text.to_string(),
             timestamp: seg.timestamp,
-            words: seg.words,
+            words: seg.words.to_vec(),
         },
         None => ServerMessage::Final {
             text: String::new(),

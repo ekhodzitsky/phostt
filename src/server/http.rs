@@ -407,9 +407,9 @@ pub async fn transcribe_stream(
             let event = match result {
                 Ok(seg) => {
                     let msg = if seg.is_final {
-                        serde_json::json!({"type": "final", "text": seg.text, "timestamp": seg.timestamp, "words": seg.words})
+                        serde_json::json!({"type": "final", "text": seg.text.as_ref(), "timestamp": seg.timestamp, "words": seg.words.as_ref()})
                     } else {
-                        serde_json::json!({"type": "partial", "text": seg.text, "timestamp": seg.timestamp, "words": seg.words})
+                        serde_json::json!({"type": "partial", "text": seg.text.as_ref(), "timestamp": seg.timestamp, "words": seg.words.as_ref()})
                     };
                     Event::default().data(msg.to_string())
                 }
