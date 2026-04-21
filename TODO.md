@@ -43,7 +43,7 @@ assumes the current state of `main`:
 Lower priority, surfaced during the rewrite — captured here so they are
 not lost.
 
-- [ ] Inspect & document the encoder ONNX input/output names via `ort::Session::inputs()/outputs()` so a future upstream re-export with renamed tensors does not silently break us. Add a `phostt inspect-onnx` debug subcommand.
+- [x] ~~Inspect & document the encoder ONNX input/output names via `ort::Session::inputs()/outputs()` so a future upstream re-export with renamed tensors does not silently break us. Add a `phostt inspect-onnx` debug subcommand.~~ Landed as `phostt inspect`. Confirmed encoder=`(x [N, T, 80] f32, x_lens [N] i64) -> (encoder_out [N, T', 512] f32, encoder_out_lens [N] i64)`, decoder=`(y [N, 2] i64) -> (decoder_out [N, 512] f32)`, joiner=`(encoder_out [N, 512], decoder_out [N, 512]) -> (logit [N, 2000] f32)`.
 - [ ] Verify `RuntimeLimits::shutdown_drain_secs` semantics with the new (longer-loop) decoder; current default of 10 s should still be enough but exercise it with a deliberately slow encoder pool.
 - [ ] Decide the long-term fate of `src/quantize.rs` — Zipformer-vi ships pre-quantized so the in-tree quantizer is dead weight on the user hot path. Either delete (and drop `prost`/`prost-build` + `proto/onnx.proto` + the `protoc` build dependency) or move under a `--features quantize` cfg gate and document it as a developer-only utility.
 - [ ] Re-enable a real WER benchmark on a public Vietnamese test set (VLSP, FLEURS) to track regressions across model bumps.

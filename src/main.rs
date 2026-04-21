@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use phostt::server::{OriginPolicy, RuntimeLimits, ServerConfig};
-use phostt::{inference, model, server};
+use phostt::{inference, inspect, model, server};
 use std::net::IpAddr;
 use tracing_subscriber::EnvFilter;
 
@@ -116,6 +116,13 @@ enum Commands {
         /// Path to WAV file (PCM16 mono)
         file: String,
 
+        /// Model directory
+        #[arg(long, default_value_t = model::default_model_dir())]
+        model_dir: String,
+    },
+
+    /// Print encoder/decoder/joiner ONNX I/O metadata for debugging
+    Inspect {
         /// Model directory
         #[arg(long, default_value_t = model::default_model_dir())]
         model_dir: String,
@@ -258,6 +265,10 @@ async fn main() -> anyhow::Result<()> {
             let result = engine.transcribe_file(&file, &mut guard);
             drop(guard);
             println!("{}", result?.text);
+        }
+        Commands::Inspect { model_dir } => {
+            model::ensure_model(&model_dir).await?;
+            inspect::inspect_models(std::path::Path::new(&model_dir))?;
         }
     }
 
