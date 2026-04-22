@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+## [0.2.2] - 2026-04-21
+
+### Fixed
+
+- **High** — Zero-copy SSE streaming: `decode_audio_streaming` feeds decoded
+  chunks directly into inference without a full `Vec<f32>` buffer. Clients
+  receive the first partial immediately after the first decoded packet.
+
+### Changed
+
+- `transcribe_stream`: single `spawn_blocking` pass (decode + inference merged),
+  eliminating the double-buffer memory peak.
+- `resample` test tolerance widened (rubato sinc latency edge case).
+
+### Added
+
+- `test_decode_streaming_matches_batch`: verifies bit-exact equivalence between
+  streaming and batch decode paths.
+
 ## [0.2.0] - 2026-04-21
 
 ### Added
