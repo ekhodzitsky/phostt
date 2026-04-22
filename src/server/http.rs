@@ -304,31 +304,6 @@ pub async fn transcribe_stream(
         ));
     }
 
-    // Decode audio first (in spawn_blocking since symphonia is blocking).
-    // `body` is `axum::body::Bytes`, so the move into the blocking closure is
-    // a refcount bump and `decode_audio_bytes_shared` reads the upload
-    // buffer in place.
-    let samples = tokio::task::spawn_blocking(move || {
-        crate::inference::audio::decode_audio_bytes_shared(body)
-    })
-    .await
-    .map_err(|e| {
-        tracing::error!("spawn_blocking join error: {e}");
-        api_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Internal server error",
-            "internal",
-        )
-    })?
-    .map_err(|e| {
-        tracing::error!("Audio decode error: {e:#}");
-        api_error(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "Failed to decode audio file. Check format (WAV, MP3, M4A, OGG, FLAC supported).",
-            "invalid_audio",
-        )
-    })?;
-
     // Checkout a session triplet from the pool. Strip the lifetime via
     // `into_owned` so the triplet can travel through `spawn_blocking`.
     let guard = match tokio::time::timeout(
@@ -367,17 +342,47 @@ pub async fn transcribe_stream(
                 }
             };
             let chunk_size = 16000; // 1 second at 16kHz
+            let mut chunk_buf: Vec<f32> = Vec::with_capacity(chunk_size);
 
-            for chunk in samples.chunks(chunk_size) {
+            // Zero-copy streaming decode: symphonia feeds decoded samples
+            // straight into the inference loop without a full Vec<f32> buffer.
+            let decode_result = crate::inference::audio::decode_audio_streaming(body, |samples| {
                 if cancel.is_cancelled() {
-                    tracing::info!("SSE transcription cancelled by shutdown");
-                    return;
+                    return Ok(());
                 }
-                match engine.process_chunk(chunk, &mut stream_state, &mut triplet) {
+                chunk_buf.extend_from_slice(samples);
+                while chunk_buf.len() >= chunk_size {
+                    let chunk: Vec<f32> = chunk_buf.drain(..chunk_size).collect();
+                    match engine.process_chunk(&chunk, &mut stream_state, &mut triplet) {
+                        Ok(segs) => {
+                            for seg in segs {
+                                if tx.blocking_send(Ok(seg)).is_err() {
+                                    // Receiver dropped (client disconnected)
+                                    return Err(anyhow::anyhow!("receiver dropped"));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let _ = tx.blocking_send(Err(format!("{e}")));
+                            return Err(anyhow::anyhow!("inference failed"));
+                        }
+                    }
+                }
+                Ok(())
+            });
+
+            if let Err(e) = decode_result {
+                tracing::error!("Streaming decode error: {e:#}");
+                let _ = tx.blocking_send(Err(format!("{e}")));
+                return;
+            }
+
+            // Process any trailing samples (< chunk_size)
+            if !chunk_buf.is_empty() && !cancel.is_cancelled() {
+                match engine.process_chunk(&chunk_buf, &mut stream_state, &mut triplet) {
                     Ok(segs) => {
                         for seg in segs {
                             if tx.blocking_send(Ok(seg)).is_err() {
-                                // Receiver dropped (client disconnected)
                                 return;
                             }
                         }

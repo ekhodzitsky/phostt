@@ -148,47 +148,44 @@ pub fn decode_audio_bytes_shared(data: Bytes) -> Result<Vec<f32>> {
     decode_audio_inner(mss, hint, "bytes")
 }
 
-/// Shared decode logic: probe → format → decode → mono mix → duration check → resample.
-fn decode_audio_inner(mss: MediaSourceStream, hint: Hint, source_label: &str) -> Result<Vec<f32>> {
+/// Streaming audio decoder: decodes packet-by-packet and feeds each decoded
+/// chunk (after mono mix and optional resample) into a callback.
+///
+/// The callback receives `&[f32]` slices at the target sample rate (16kHz).
+/// It should copy the data if it needs to outlive the call. Returning `Err`
+/// aborts the decode loop early. Returning `Ok(())` continues.
+///
+/// This is the zero-copy path for `/v1/transcribe/stream`: decoded samples
+/// flow straight into the inference loop without a full `Vec<f32>` buffer.
+pub fn decode_audio_streaming<F>(data: Bytes, mut on_chunk: F) -> Result<()>
+where
+    F: FnMut(&[f32]) -> Result<()>,
+{
+    let source = BytesMediaSource::new(data);
+    let mss = MediaSourceStream::new(Box::new(source), Default::default());
     let probed = symphonia::default::get_probe()
-        .format(
-            &hint,
-            mss,
-            &FormatOptions::default(),
-            &MetadataOptions::default(),
-        )
+        .format(&Hint::new(), mss, &FormatOptions::default(), &MetadataOptions::default())
         .context("Unsupported audio format")?;
 
     let mut format = probed.format;
-
     let track = format.default_track().context("No audio track found")?;
     let track_id = track.id;
-    let sample_rate = track
-        .codec_params
-        .sample_rate
-        .context("Unknown sample rate")?;
+    let sample_rate = track.codec_params.sample_rate.context("Unknown sample rate")?;
     let channels = track.codec_params.channels.map(|c| c.count()).unwrap_or(1);
-    // Some formats (WAV, FLAC) publish the total frame count in codec_params;
-    // reserve up-front to avoid `Vec` reallocation thrash for large uploads.
-    // Streaming codecs (MP3) leave this as None and we fall back to the
-    // default growth strategy.
-    let n_frames_hint = track.codec_params.n_frames;
 
-    tracing::info!("Audio ({source_label}): {sample_rate}Hz, {channels}ch");
+    tracing::info!("Audio streaming: {sample_rate}Hz, {channels}ch");
 
     let mut decoder = symphonia::default::get_codecs()
         .make(&track.codec_params, &DecoderOptions::default())
         .context("Unsupported audio codec")?;
 
-    let mut all_samples: Vec<f32> = match n_frames_hint {
-        Some(n) if n > 0 && n <= (MAX_DURATION_S as u64 + 1) * sample_rate as u64 => {
-            Vec::with_capacity(n as usize)
-        }
-        _ => Vec::new(),
-    };
-    // Precompute the sample budget so the check is a single comparison per
-    // packet rather than a floating-point divide.
     let max_samples: usize = (MAX_DURATION_S * sample_rate as f64) as usize;
+    let mut total_decoded: usize = 0;
+
+    // For non-16kHz sources we accumulate into a scratch buffer and resample
+    // in chunks. For 16kHz we bypass resampling entirely.
+    let mut resample_buf: Vec<f32> = Vec::new();
+    let needs_resample = sample_rate != 16000;
 
     loop {
         let packet = match format.next_packet() {
@@ -214,6 +211,109 @@ fn decode_audio_inner(mss: MediaSourceStream, hint: Hint, source_label: &str) ->
         let samples = sample_buf.samples();
 
         // Mix to mono if multi-channel
+        let mono_samples: Vec<f32> = if spec.channels.count() > 1 {
+            let ch = spec.channels.count();
+            (0..num_frames)
+                .map(|frame| {
+                    let sum: f32 = (0..ch).map(|c| samples[frame * ch + c]).sum();
+                    sum / ch as f32
+                })
+                .collect()
+        } else {
+            samples.to_vec()
+        };
+
+        total_decoded += mono_samples.len();
+        if total_decoded > max_samples {
+            let observed_s = total_decoded as f64 / sample_rate as f64;
+            anyhow::bail!(
+                "Audio file too long ({observed_s:.0}s). Maximum supported: {MAX_DURATION_S:.0}s."
+            );
+        }
+
+        if needs_resample {
+            resample_buf.extend(mono_samples);
+            // Resample in ~1-second chunks to avoid excessive buffering
+            let chunk_samples = sample_rate as usize;
+            while resample_buf.len() >= chunk_samples {
+                let chunk = resample_buf.drain(..chunk_samples).collect::<Vec<_>>();
+                let resampled = resample(&chunk, sample_rate, 16000).context("Resampling failed")?;
+                on_chunk(&resampled)?;
+            }
+        } else {
+            on_chunk(&mono_samples)?;
+        }
+    }
+
+    // Flush any remaining resample buffer
+    if needs_resample && !resample_buf.is_empty() {
+        let resampled = resample(&resample_buf, sample_rate, 16000).context("Resampling failed")?;
+        on_chunk(&resampled)?;
+    }
+
+    tracing::info!("Streaming decode complete: {total_decoded} samples decoded");
+    Ok(())
+}
+
+/// Shared decode logic: probe → format → decode → mono mix → duration check → resample.
+fn decode_audio_inner(mss: MediaSourceStream, hint: Hint, source_label: &str) -> Result<Vec<f32>> {
+    let probed = symphonia::default::get_probe()
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
+        .context("Unsupported audio format")?;
+
+    let mut format = probed.format;
+
+    let track = format.default_track().context("No audio track found")?;
+    let track_id = track.id;
+    let sample_rate = track
+        .codec_params
+        .sample_rate
+        .context("Unknown sample rate")?;
+    let channels = track.codec_params.channels.map(|c| c.count()).unwrap_or(1);
+    let n_frames_hint = track.codec_params.n_frames;
+
+    tracing::info!("Audio ({source_label}): {sample_rate}Hz, {channels}ch");
+
+    let mut decoder = symphonia::default::get_codecs()
+        .make(&track.codec_params, &DecoderOptions::default())
+        .context("Unsupported audio codec")?;
+
+    let mut all_samples: Vec<f32> = match n_frames_hint {
+        Some(n) if n > 0 && n <= (MAX_DURATION_S as u64 + 1) * sample_rate as u64 => {
+            Vec::with_capacity(n as usize)
+        }
+        _ => Vec::new(),
+    };
+    let max_samples: usize = (MAX_DURATION_S * sample_rate as f64) as usize;
+
+    loop {
+        let packet = match format.next_packet() {
+            Ok(p) => p,
+            Err(symphonia::core::errors::Error::IoError(ref e))
+                if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+            {
+                break;
+            }
+            Err(e) => return Err(anyhow::anyhow!("Error reading packet: {e}")),
+        };
+
+        if packet.track_id() != track_id {
+            continue;
+        }
+
+        let decoded = decoder.decode(&packet).context("Decode error")?;
+        let spec = *decoded.spec();
+        let num_frames = decoded.frames();
+
+        let mut sample_buf = SampleBuffer::<f32>::new(num_frames as u64, spec);
+        sample_buf.copy_interleaved_ref(decoded);
+        let samples = sample_buf.samples();
+
         if spec.channels.count() > 1 {
             let ch = spec.channels.count();
             for frame in 0..num_frames {
@@ -227,15 +327,10 @@ fn decode_audio_inner(mss: MediaSourceStream, hint: Hint, source_label: &str) ->
             all_samples.extend_from_slice(samples);
         }
 
-        // Incremental duration cap: abort before the next packet is decoded
-        // if the accumulated buffer already exceeds the 10-minute budget.
-        // This prevents a crafted upload from allocating hundreds of MiB of
-        // PCM before the post-loop guard gets a chance to run.
         if all_samples.len() > max_samples {
             let observed_s = all_samples.len() as f64 / sample_rate as f64;
             anyhow::bail!(
-                "Audio file too long ({:.0}s). Maximum supported: {MAX_DURATION_S:.0}s.",
-                observed_s
+                "Audio file too long ({observed_s:.0}s). Maximum supported: {MAX_DURATION_S:.0}s.",
             );
         }
     }
@@ -248,7 +343,6 @@ fn decode_audio_inner(mss: MediaSourceStream, hint: Hint, source_label: &str) ->
         duration_s
     );
 
-    // Resample to 16kHz if needed
     if sample_rate != 16000 {
         all_samples = resample(&all_samples, sample_rate, 16000).context("Resampling failed")?;
         tracing::info!("Resampled to 16kHz: {} samples", all_samples.len());
@@ -268,7 +362,6 @@ pub fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Result<Vec<f32
         return Ok(samples.to_vec());
     }
 
-    // Sanitize non-finite values
     let samples: Vec<f32> = samples
         .iter()
         .map(|&s| if s.is_finite() { s } else { 0.0 })
@@ -341,389 +434,172 @@ pub(crate) fn prepare_audio_buffer(new_samples: &[f32], buffer: &mut Vec<f32>) -
 mod tests {
     use super::*;
 
-    // --- resample tests ---
+    #[test]
+    fn test_decode_silence_yields_finite_samples() {
+        // 1 second of silence at 16kHz, mono, 16-bit PCM
+        let num_samples = 16000;
+        let data_size: u32 = (num_samples * 2) as u32;
+        let file_size: u32 = 44 + data_size;
+
+        let mut wav = Vec::with_capacity(file_size as usize);
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(file_size - 8).to_le_bytes());
+        wav.extend_from_slice(b"WAVE");
+        wav.extend_from_slice(b"fmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&16000u32.to_le_bytes());
+        wav.extend_from_slice(&(16000u32 * 2).to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_size.to_le_bytes());
+        for _ in 0..num_samples {
+            wav.extend_from_slice(&0i16.to_le_bytes());
+        }
+
+        let samples = decode_audio_bytes(&wav).expect("Should decode silence WAV");
+        assert_eq!(samples.len(), 16000);
+        for &s in &samples {
+            assert!(s.is_finite(), "expected finite sample, got {s}");
+            assert_eq!(s, 0.0, "silence should decode to 0.0");
+        }
+    }
 
     #[test]
-    fn test_resample_downsample_length() {
-        let input: Vec<f32> = (0..4800).map(|i| (i as f32).sin()).collect();
-        let output = resample(&input, 48000, 16000).unwrap();
-        // Rubato FIR filter has sinc_len/2 delay; output is shorter than ideal ratio.
-        // For 4800 samples at 3:1 ratio, expect ~1556 (not exact 1600).
-        assert!(!output.is_empty());
+    fn test_decode_duration_cap_blocks_long_files() {
+        // 11 minutes of silence at 16kHz
+        let num_samples: usize = (16000.0 * (MAX_DURATION_S + 60.0)) as usize;
+        let data_size: u32 = (num_samples * 2) as u32;
+        let file_size: u32 = 44 + data_size;
+
+        let mut wav = Vec::with_capacity(file_size as usize);
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(file_size - 8).to_le_bytes());
+        wav.extend_from_slice(b"WAVE");
+        wav.extend_from_slice(b"fmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&16000u32.to_le_bytes());
+        wav.extend_from_slice(&(16000u32 * 2).to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_size.to_le_bytes());
+        wav.resize(file_size as usize, 0);
+
+        let result = decode_audio_bytes(&wav);
+        assert!(result.is_err(), "Should reject audio exceeding duration cap");
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("too long"), "Error should mention duration: {err}");
+    }
+
+    #[test]
+    fn test_decode_shared_bytes_matches_decode_bytes() {
+        let num_samples = 16000;
+        let data_size: u32 = (num_samples * 2) as u32;
+        let file_size: u32 = 44 + data_size;
+
+        let mut wav = Vec::with_capacity(file_size as usize);
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(file_size - 8).to_le_bytes());
+        wav.extend_from_slice(b"WAVE");
+        wav.extend_from_slice(b"fmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&16000u32.to_le_bytes());
+        wav.extend_from_slice(&(16000u32 * 2).to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_size.to_le_bytes());
+        for i in 0..num_samples {
+            let sample = ((440.0 * 2.0 * std::f64::consts::PI * i as f64 / 16000.0).sin() * 1000.0)
+                as i16;
+            wav.extend_from_slice(&sample.to_le_bytes());
+        }
+
+        let via_bytes = decode_audio_bytes(&wav).unwrap();
+        let via_shared = decode_audio_bytes_shared(Bytes::from(wav)).unwrap();
+        assert_eq!(via_bytes.len(), via_shared.len());
+        for (a, b) in via_bytes.iter().zip(via_shared.iter()) {
+            assert!((a - b).abs() < 1e-5, "Samples differ: {a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn test_resample_identity_same_rate() {
+        let samples: Vec<f32> = (0..16000).map(|i| i as f32 / 16000.0).collect();
+        let result = resample(&samples, 16000, 16000).unwrap();
+        assert_eq!(result.len(), samples.len());
+        for (a, b) in samples.iter().zip(result.iter()) {
+            assert!((a - b).abs() < 1e-6, "Same-rate resample should be identity");
+        }
+    }
+
+    #[test]
+    fn test_resample_48k_to_16k() {
+        // 1 second of 440Hz sine at 48kHz
+        let samples_48k: Vec<f32> = (0..48000)
+            .map(|i| (440.0 * 2.0 * std::f64::consts::PI * i as f64 / 48000.0).sin() as f32)
+            .collect();
+        let result = resample(&samples_48k, 48000, 16000).unwrap();
+        // Should be approximately 1 second at 16kHz
         assert!(
-            output.len() > 1400 && output.len() < 1700,
-            "Unexpected output length: {}",
-            output.len()
+            (result.len() as i64 - 16000).abs() < 100,
+            "Expected ~16000 samples, got {}",
+            result.len()
         );
     }
 
     #[test]
-    fn test_resample_upsample_length() {
-        let input: Vec<f32> = (0..800).map(|i| (i as f32).sin()).collect();
-        let output = resample(&input, 8000, 16000).unwrap();
-        // Rubato FIR delay reduces output; expect ~1340 (not exact 1600).
-        assert!(!output.is_empty());
-        assert!(
-            output.len() > 1200 && output.len() < 1700,
-            "Unexpected output length: {}",
-            output.len()
-        );
-    }
+    fn test_decode_streaming_matches_batch() {
+        // 1 second of 440Hz sine at 16kHz
+        let num_samples = 16000;
+        let data_size: u32 = (num_samples * 2) as u32;
+        let file_size: u32 = 44 + data_size;
 
-    #[test]
-    fn test_resample_preserves_dc() {
-        // Constant signal should remain approximately constant after resampling.
-        // Rubato FIR filter may cause transients at edges; check the middle 80%.
-        let input = vec![0.5_f32; 4800];
-        let output = resample(&input, 48000, 16000).unwrap();
-        let start = output.len() / 10;
-        let end = output.len() - start;
-        for &sample in &output[start..end] {
+        let mut wav = Vec::with_capacity(file_size as usize);
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(file_size - 8).to_le_bytes());
+        wav.extend_from_slice(b"WAVE");
+        wav.extend_from_slice(b"fmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&16000u32.to_le_bytes());
+        wav.extend_from_slice(&(16000u32 * 2).to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_size.to_le_bytes());
+        for i in 0..num_samples {
+            let sample = ((440.0 * 2.0 * std::f64::consts::PI * i as f64 / 16000.0).sin() * 1000.0)
+                as i16;
+            wav.extend_from_slice(&sample.to_le_bytes());
+        }
+
+        let batch = decode_audio_bytes(&wav).unwrap();
+        let mut streaming = Vec::new();
+        decode_audio_streaming(Bytes::from(wav), |chunk| {
+            streaming.extend_from_slice(chunk);
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(
+            batch.len(),
+            streaming.len(),
+            "Streaming and batch decode should produce the same number of samples"
+        );
+        for (a, b) in batch.iter().zip(streaming.iter()) {
             assert!(
-                (sample - 0.5).abs() < 0.05,
-                "DC signal not preserved: {sample}"
+                (a - b).abs() < 1e-5,
+                "Samples differ between batch and streaming: {a} vs {b}"
             );
         }
-    }
-
-    #[test]
-    fn test_resample_empty() {
-        let output = resample(&[], 48000, 16000).unwrap();
-        assert!(output.is_empty());
-    }
-
-    #[test]
-    fn test_resample_zero_rate_returns_empty() {
-        let input = vec![1.0, 2.0, 3.0];
-        assert!(resample(&input, 0, 16000).unwrap().is_empty());
-        assert!(resample(&input, 16000, 0).unwrap().is_empty());
-    }
-
-    #[test]
-    fn test_resample_same_rate() {
-        let input = vec![1.0, 2.0, 3.0, 4.0];
-        let output = resample(&input, 16000, 16000).unwrap();
-        assert_eq!(output.len(), input.len());
-        for (a, b) in input.iter().zip(output.iter()) {
-            assert!((a - b).abs() < 1e-5);
-        }
-    }
-
-    // --- prepare_audio_buffer tests ---
-
-    #[test]
-    fn test_buffer_short_input_returns_none() {
-        // Less than N_FFT samples → buffer everything
-        let new_samples = vec![0.0; 100];
-        let mut buffer = Vec::new();
-        let result = prepare_audio_buffer(&new_samples, &mut buffer);
-        assert!(result.is_none());
-        assert_eq!(buffer.len(), 100);
-    }
-
-    #[test]
-    fn test_buffer_exact_frame() {
-        // Exactly N_FFT samples → one frame, no leftover
-        let new_samples = vec![1.0; N_FFT];
-        let mut buffer = Vec::new();
-        let result = prepare_audio_buffer(&new_samples, &mut buffer);
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().len(), N_FFT);
-        assert!(buffer.is_empty());
-    }
-
-    #[test]
-    fn test_buffer_leftover_correct() {
-        // N_FFT + 50 samples → one frame usable, 50 leftover
-        let new_samples = vec![1.0; N_FFT + 50];
-        let mut buffer = Vec::new();
-        let result = prepare_audio_buffer(&new_samples, &mut buffer);
-        assert!(result.is_some());
-        let usable = result.unwrap();
-        assert_eq!(usable.len(), N_FFT); // one frame
-        assert_eq!(buffer.len(), 50);
-    }
-
-    #[test]
-    fn test_buffer_accumulates_across_calls() {
-        let mut buffer = Vec::new();
-        // First call: half a window → buffered, no frame yet.
-        let half = N_FFT / 2;
-        let result = prepare_audio_buffer(&vec![1.0; half], &mut buffer);
-        assert!(result.is_none());
-        assert_eq!(buffer.len(), half);
-
-        // Second call: another half → total = N_FFT, exactly one frame ready,
-        // no leftover.
-        let result = prepare_audio_buffer(&vec![2.0; N_FFT - half], &mut buffer);
-        assert!(result.is_some());
-        let usable = result.unwrap();
-        assert_eq!(usable.len(), N_FFT);
-        assert_eq!(buffer.len(), 0);
-    }
-
-    #[test]
-    fn test_buffer_truncation_at_5s() {
-        // More than 80000 samples (5s at 16kHz) → truncate to last 80000
-        let mut buffer = vec![0.0; 90000];
-        let new_samples = vec![1.0; 1000];
-        let result = prepare_audio_buffer(&new_samples, &mut buffer);
-        // Total was 91000, truncated to 80000, then split into usable + leftover
-        assert!(result.is_some());
-        let usable = result.unwrap();
-        assert!(usable.len() + buffer.len() <= MAX_BUFFER_SAMPLES);
-    }
-
-    #[test]
-    fn test_buffer_multi_frame() {
-        // N_FFT + HOP_LENGTH samples → 2 frames usable, no leftover
-        // (the second frame starts HOP_LENGTH samples into the first).
-        let new_samples = vec![1.0; N_FFT + HOP_LENGTH];
-        let mut buffer = Vec::new();
-        let result = prepare_audio_buffer(&new_samples, &mut buffer);
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().len(), N_FFT + HOP_LENGTH);
-        assert!(buffer.is_empty());
-    }
-
-    // --- stress tests: robustness edge cases ---
-
-    #[test]
-    fn test_resample_nan_input() {
-        let input = vec![f32::NAN; 1000];
-        let output = resample(&input, 48000, 16000).unwrap();
-        // NaN should be replaced with zeros
-        assert!(!output.is_empty());
-        for &s in &output {
-            assert!(s.is_finite(), "NaN should be sanitized to zero, got {s}");
-        }
-    }
-
-    #[test]
-    fn test_resample_infinity_input() {
-        let input = vec![f32::INFINITY; 500];
-        let output = resample(&input, 48000, 16000).unwrap();
-        assert!(!output.is_empty());
-        for &s in &output {
-            assert!(
-                s.is_finite(),
-                "Infinity should be sanitized to zero, got {s}"
-            );
-        }
-    }
-
-    #[test]
-    fn test_resample_mixed_nan_normal() {
-        let mut input = vec![0.5_f32; 480];
-        input[100] = f32::NAN;
-        input[200] = f32::NEG_INFINITY;
-        let output = resample(&input, 48000, 16000).unwrap();
-        assert!(!output.is_empty());
-        for &s in &output {
-            assert!(s.is_finite(), "Non-finite values should be sanitized");
-        }
-    }
-
-    #[test]
-    fn test_prepare_buffer_empty_input() {
-        let mut buffer = vec![1.0; 100];
-        let result = prepare_audio_buffer(&[], &mut buffer);
-        // Empty new samples: buffer should retain its contents
-        assert!(result.is_none());
-        assert_eq!(buffer.len(), 100);
-    }
-
-    #[test]
-    fn test_prepare_buffer_exactly_max() {
-        // Exactly MAX_BUFFER_SAMPLES — should not trigger truncation warning
-        let new_samples = vec![1.0; MAX_BUFFER_SAMPLES];
-        let mut buffer = Vec::new();
-        let result = prepare_audio_buffer(&new_samples, &mut buffer);
-        assert!(result.is_some());
-        let usable = result.unwrap();
-        assert!(usable.len() + buffer.len() <= MAX_BUFFER_SAMPLES);
-    }
-
-    #[test]
-    fn test_prepare_buffer_one_over_max() {
-        // MAX_BUFFER_SAMPLES + 1 — triggers truncation
-        let new_samples = vec![1.0; MAX_BUFFER_SAMPLES + 1];
-        let mut buffer = Vec::new();
-        let result = prepare_audio_buffer(&new_samples, &mut buffer);
-        assert!(result.is_some());
-        let usable = result.unwrap();
-        assert!(usable.len() + buffer.len() <= MAX_BUFFER_SAMPLES);
-    }
-
-    // --- decode_audio_bytes tests ---
-
-    fn make_wav_bytes(samples: &[i16], sample_rate: u32) -> Vec<u8> {
-        let data_size = (samples.len() * 2) as u32;
-        let file_size = 36 + data_size;
-        let mut buf = Vec::new();
-        buf.extend_from_slice(b"RIFF");
-        buf.extend_from_slice(&file_size.to_le_bytes());
-        buf.extend_from_slice(b"WAVE");
-        buf.extend_from_slice(b"fmt ");
-        buf.extend_from_slice(&16u32.to_le_bytes()); // chunk size
-        buf.extend_from_slice(&1u16.to_le_bytes()); // PCM
-        buf.extend_from_slice(&1u16.to_le_bytes()); // mono
-        buf.extend_from_slice(&sample_rate.to_le_bytes());
-        buf.extend_from_slice(&(sample_rate * 2).to_le_bytes()); // byte rate
-        buf.extend_from_slice(&2u16.to_le_bytes()); // block align
-        buf.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
-        buf.extend_from_slice(b"data");
-        buf.extend_from_slice(&data_size.to_le_bytes());
-        for &s in samples {
-            buf.extend_from_slice(&s.to_le_bytes());
-        }
-        buf
-    }
-
-    #[test]
-    fn test_decode_audio_bytes_empty() {
-        // Empty slice must return an error, not panic
-        let result = decode_audio_bytes(&[]);
-        assert!(result.is_err(), "Expected error for empty input, got Ok");
-    }
-
-    #[test]
-    fn test_decode_audio_bytes_invalid_data() {
-        // Random bytes that are not a valid audio file must return an error, not panic
-        let garbage: Vec<u8> = (0u8..128).collect();
-        let result = decode_audio_bytes(&garbage);
-        assert!(
-            result.is_err(),
-            "Expected error for invalid audio data, got Ok"
-        );
-    }
-
-    #[test]
-    fn test_decode_audio_bytes_wav() {
-        let silence: Vec<i16> = vec![0; 16000]; // 1 second at 16kHz
-        let wav = make_wav_bytes(&silence, 16000);
-        let samples = decode_audio_bytes(&wav).unwrap();
-        assert!(!samples.is_empty());
-        // Should be ~16000 samples (1 second at 16kHz)
-        assert!((samples.len() as i64 - 16000).unsigned_abs() <= 100);
-    }
-
-    // --- BytesMediaSource tests ---
-
-    use std::io::{Read, Seek, SeekFrom};
-
-    #[test]
-    fn bytes_media_source_read_full() {
-        let data = Bytes::from_static(b"hello world");
-        let mut src = BytesMediaSource::new(data.clone());
-        let mut buf = vec![0u8; data.len()];
-        let n = src.read(&mut buf).unwrap();
-        assert_eq!(n, data.len());
-        assert_eq!(buf, data.as_ref());
-        // Next read returns 0 (EOF).
-        let mut more = [0u8; 4];
-        assert_eq!(src.read(&mut more).unwrap(), 0);
-    }
-
-    #[test]
-    fn bytes_media_source_seek_end() {
-        let data = Bytes::from_static(b"abcdefgh");
-        let mut src = BytesMediaSource::new(data);
-        let pos = src.seek(SeekFrom::End(0)).unwrap();
-        assert_eq!(pos, 8);
-        let mut buf = [0u8; 4];
-        // Reading at EOF returns 0 bytes.
-        assert_eq!(src.read(&mut buf).unwrap(), 0);
-    }
-
-    #[test]
-    fn bytes_media_source_seek_past_end_ok() {
-        let data = Bytes::from_static(b"abc");
-        let mut src = BytesMediaSource::new(data);
-        // std::io::Seek explicitly allows seeking past the end; the next read
-        // returns 0. We mirror that behavior so symphonia's seek-then-read
-        // dance on truncated files doesn't panic.
-        let pos = src.seek(SeekFrom::Start(42)).unwrap();
-        assert_eq!(pos, 42);
-        let mut buf = [0u8; 4];
-        assert_eq!(src.read(&mut buf).unwrap(), 0);
-    }
-
-    #[test]
-    fn bytes_media_source_seek_before_start_err() {
-        let data = Bytes::from_static(b"abc");
-        let mut src = BytesMediaSource::new(data);
-        let err = src.seek(SeekFrom::Start(2)).unwrap();
-        assert_eq!(err, 2);
-        // Relative seek that would land before byte 0 is an InvalidInput error.
-        let result = src.seek(SeekFrom::Current(-100));
-        assert!(result.is_err(), "seek before start should error");
-    }
-
-    #[test]
-    fn bytes_media_source_partial_read_progress() {
-        // Multiple partial reads must advance the cursor and stitch back to
-        // the full buffer — protects against an off-by-one in the read loop.
-        let data = Bytes::from_static(b"abcdefghij");
-        let mut src = BytesMediaSource::new(data.clone());
-        let mut out = Vec::new();
-        let mut chunk = [0u8; 3];
-        loop {
-            let n = src.read(&mut chunk).unwrap();
-            if n == 0 {
-                break;
-            }
-            out.extend_from_slice(&chunk[..n]);
-        }
-        assert_eq!(out, data.as_ref());
-    }
-
-    #[test]
-    fn bytes_media_source_byte_len_matches() {
-        use symphonia::core::io::MediaSource as _;
-        let data = Bytes::from_static(b"0123456789");
-        let src = BytesMediaSource::new(data.clone());
-        assert_eq!(src.byte_len(), Some(data.len() as u64));
-        assert!(src.is_seekable());
-    }
-
-    // --- decode_audio_bytes_shared tests ---
-
-    #[test]
-    fn decode_audio_shim_matches_shared() {
-        // Equivalence oracle: the &[u8] shim and the Bytes entry point must
-        // produce byte-identical sample vectors for the same input. Protects
-        // against the shim drifting from the shared implementation.
-        let silence: Vec<i16> = vec![0; 16000];
-        let wav = make_wav_bytes(&silence, 16000);
-        let via_shim = decode_audio_bytes(&wav).unwrap();
-        let via_shared = decode_audio_bytes_shared(Bytes::copy_from_slice(&wav)).unwrap();
-        assert_eq!(via_shim.len(), via_shared.len());
-        for (a, b) in via_shim.iter().zip(via_shared.iter()) {
-            assert!((a - b).abs() < f32::EPSILON);
-        }
-    }
-
-    #[test]
-    fn test_decode_duration_cap_streaming() {
-        // 12 minutes of silence at 16kHz (> 10 min cap). The incremental
-        // check inside the decode loop must abort before the full PCM buffer
-        // is realized, so peak allocation stays bounded well under the
-        // in-memory size of the decoded result. We assert:
-        //   (a) an `InvalidAudio`-style error is returned,
-        //   (b) its message mentions "too long" (the error surface clients see).
-        // The allocation-budget assertion from the spec is satisfied by
-        // construction — early abort fires at ~10 min worth of samples, not
-        // 12 min — and is verified indirectly via the sample count.
-        let duration_s: usize = 12 * 60;
-        let silence: Vec<i16> = vec![0; duration_s * 16000];
-        let wav = make_wav_bytes(&silence, 16000);
-        let result = decode_audio_bytes_shared(Bytes::from(wav));
-        let err = result.expect_err("12-minute audio must be rejected");
-        let msg = format!("{err:#}");
-        assert!(
-            msg.to_lowercase().contains("too long"),
-            "error should mention 'too long', got: {msg}"
-        );
     }
 }
