@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+## [0.2.3] - 2026-04-21
+
+### Fixed
+
+- **Spec 001** — Pool slot leak: `PoolItemGuard<T>` RAII guard automatically
+  returns triplets to the pool during panic unwind. Previously a panic in
+  `spawn_blocking` permanently lost the slot.
+- **Spec 001** — Metrics poison: `RwLock::write().unwrap_or_else(|e| e.into_inner())`
+  recovers from poisoned locks instead of panicking. A single handler crash no
+  longer breaks all subsequent metric writes.
+
+### Added
+
+- `PoolItemGuard<T>` — couples an owned pool item with its reservation for
+  automatic Drop recovery.
+- `specs/001-pool-metrics-reliability.md` — spec-driven design document.
+
 ## [0.2.2] - 2026-04-21
 
 ### Fixed
