@@ -109,7 +109,7 @@ impl MetricsRegistry {
     /// Set the `# HELP` text for a counter family. Called during startup;
     /// overwrites any previously registered help text for the same name.
     pub fn register_counter(&self, name: &str, help: &str) {
-        let mut map = self.counters.write().expect("counters lock poisoned");
+        let mut map = self.counters.write().unwrap_or_else(|e| e.into_inner());
         map.entry(name.to_string()).or_default().help = help.to_string();
     }
 
@@ -120,7 +120,7 @@ impl MetricsRegistry {
         let mut normalised: Vec<f64> = buckets.to_vec();
         normalised.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         normalised.dedup();
-        let mut map = self.histograms.write().expect("histograms lock poisoned");
+        let mut map = self.histograms.write().unwrap_or_else(|e| e.into_inner());
         let family = map.entry(name.to_string()).or_default();
         family.help = help.to_string();
         family.buckets = normalised;
@@ -129,7 +129,7 @@ impl MetricsRegistry {
     /// Increment a counter. Lazily creates the family if it didn't exist.
     pub fn counter_inc(&self, name: &str, labels: Labels, delta: u64) {
         let labels = sort_labels(labels);
-        let mut map = self.counters.write().expect("counters lock poisoned");
+        let mut map = self.counters.write().unwrap_or_else(|e| e.into_inner());
         let family = map.entry(name.to_string()).or_default();
         *family.values.entry(labels).or_insert(0) += delta;
     }
@@ -138,7 +138,7 @@ impl MetricsRegistry {
     /// with [`DEFAULT_BUCKETS`] if it didn't exist.
     pub fn histogram_record(&self, name: &str, labels: Labels, value: f64) {
         let labels = sort_labels(labels);
-        let mut map = self.histograms.write().expect("histograms lock poisoned");
+        let mut map = self.histograms.write().unwrap_or_else(|e| e.into_inner());
         let family = map.entry(name.to_string()).or_default();
         if family.buckets.is_empty() {
             family.buckets = DEFAULT_BUCKETS.to_vec();
@@ -174,7 +174,7 @@ impl MetricsRegistry {
 
         // Counters first — stable alphabetical order for reproducible
         // scrape output across invocations.
-        let counters = self.counters.read().expect("counters lock poisoned");
+        let counters = self.counters.read().unwrap_or_else(|e| e.into_inner());
         let mut names: Vec<&String> = counters.keys().collect();
         names.sort();
         for name in names {
@@ -197,7 +197,7 @@ impl MetricsRegistry {
         }
         drop(counters);
 
-        let histograms = self.histograms.read().expect("histograms lock poisoned");
+        let histograms = self.histograms.read().unwrap_or_else(|e| e.into_inner());
         let mut names: Vec<&String> = histograms.keys().collect();
         names.sort();
         for name in names {
@@ -400,5 +400,41 @@ mod tests {
         let text = r.render_prometheus();
         assert!(text.contains("h_sum 4.5"));
         assert!(text.contains("h_count 3"));
+    }
+
+    #[test]
+    fn test_metrics_survive_poison() {
+        // Spec 001: A panic while holding the metrics write lock must NOT
+        // break all subsequent metric writes.
+        let r = MetricsRegistry::new();
+
+        // Poison the counters lock by panicking inside a write guard.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = r.counters.write().expect("counters lock");
+            panic!("simulated panic during metric write");
+        }));
+
+        // After poison, the next counter_inc should succeed (not panic).
+        // Current implementation panics here with "counters lock poisoned".
+        r.counter_inc("c", vec![], 1);
+        let text = r.render_prometheus();
+        assert!(text.contains("c 1"), "metrics should survive poison: {text}");
+    }
+
+    #[test]
+    fn test_metrics_multiple_poison_cycles() {
+        // Spec 001: Metrics must survive repeated poison events.
+        let r = MetricsRegistry::new();
+
+        for i in 0..3 {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _guard = r.counters.write().expect("counters lock");
+                panic!("poison cycle {i}");
+            }));
+            r.counter_inc("c", vec![], 1);
+        }
+
+        let text = r.render_prometheus();
+        assert!(text.contains("c 3"), "metrics should accumulate across poison cycles: {text}");
     }
 }

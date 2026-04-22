@@ -253,13 +253,11 @@ impl<T> Drop for PoolGuard<'_, T> {
 }
 
 /// Owned counterpart to [`PoolGuard`] for `'static` contexts (e.g.
-/// `spawn_blocking`). The item must be returned via [`Self::checkin`].
+/// `spawn_blocking`). The item is returned to the pool automatically on Drop
+/// via [`Self::checkin`], or if the guard is forgotten, via the Drop impl.
 ///
-/// This is intentionally not a Drop-guard: the blocking task takes ownership
-/// of the item (and may even mutate it during inference), so the item must
-/// travel back through the closure return path. After a panic the call site
-/// is expected to recover the item via `catch_unwind` and call `checkin` to
-/// keep the pool full.
+/// After a panic the guard is dropped during unwind, so the item is recovered
+/// without requiring the caller to manually invoke `checkin`.
 pub struct OwnedReservation<T> {
     sender: async_channel::Sender<T>,
 }
@@ -269,6 +267,66 @@ impl<T> OwnedReservation<T> {
     /// Silently drops the item if the pool has been closed.
     pub fn checkin(self, item: T) {
         let _ = self.sender.try_send(item);
+    }
+
+    /// Create an RAII guard that holds both the item and the reservation.
+    /// On drop (including during panic unwind) the item is returned to the pool.
+    pub fn guard(self, item: T) -> PoolItemGuard<T> {
+        PoolItemGuard {
+            reservation: self,
+            item: Some(item),
+        }
+    }
+}
+
+/// RAII guard that couples an owned pool item with its reservation.
+///
+/// On drop the item is automatically checked back into the pool. This is the
+/// recommended pattern for `spawn_blocking` tasks where a panic would otherwise
+/// leak the pool slot.
+pub struct PoolItemGuard<T> {
+    reservation: OwnedReservation<T>,
+    item: Option<T>,
+}
+
+impl<T> PoolItemGuard<T> {
+    /// Mutable access to the inner item.
+    pub fn item_mut(&mut self) -> &mut T {
+        self.item.as_mut().expect("PoolItemGuard item already taken")
+    }
+
+    /// Immutable access to the inner item.
+    pub fn item(&self) -> &T {
+        self.item.as_ref().expect("PoolItemGuard item already taken")
+    }
+
+    /// Consume the guard and return the item, **without** checking it back in.
+    /// The caller is responsible for returning the item via `checkin`.
+    pub fn into_inner(mut self) -> T {
+        self.item.take().expect("PoolItemGuard item already taken")
+    }
+
+
+}
+
+impl<T> Deref for PoolItemGuard<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        self.item()
+    }
+}
+
+impl<T> DerefMut for PoolItemGuard<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        self.item_mut()
+    }
+}
+
+impl<T> Drop for PoolItemGuard<T> {
+    fn drop(&mut self) {
+        if let Some(item) = self.item.take() {
+            let _ = self.reservation.sender.try_send(item);
+        }
     }
 }
 
@@ -1288,6 +1346,31 @@ mod tests {
         let pool = Pool::<u32>::new(vec![]);
         pool.close();
         pool.close();
+    }
+
+    #[tokio::test]
+    async fn test_pool_triplet_survives_panic() {
+        // Spec 001: If a spawn_blocking task panics while holding an owned
+        // triplet, the pool slot MUST be recovered automatically via Drop.
+        let pool = std::sync::Arc::new(Pool::new(vec![String::from("triplet")]));
+        let guard = pool.checkout().await.expect("checkout");
+        let (item, reservation) = guard.into_owned();
+
+        // Use the new PoolItemGuard pattern: item + reservation are coupled.
+        // Even if the closure panics, the guard's Drop returns the slot.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let mut guard = reservation.guard(item);
+            guard.push_str(" mutated");
+            panic!("simulated inference panic");
+        }));
+        assert!(result.is_err(), "panic should have occurred");
+
+        // The guard's Drop automatically returns the (possibly mutated) item.
+        assert_eq!(pool.available(), 1, "pool slot must be recovered after panic");
+
+        // Verify the item was actually returned (not just forgotten).
+        let g = pool.checkout().await.expect("checkout after panic");
+        assert_eq!(g.as_str(), "triplet mutated");
     }
 
     #[tokio::test]
