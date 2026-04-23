@@ -58,7 +58,7 @@ pub async fn metrics(State(state): State<Arc<AppState>>) -> Response {
 }
 
 /// Health check response.
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct HealthResponse {
     pub status: String,
     pub model: String,
@@ -66,7 +66,7 @@ pub struct HealthResponse {
 }
 
 /// Model info response.
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct ModelInfo {
     pub id: String,
     pub name: String,
@@ -85,7 +85,7 @@ pub struct ModelInfo {
 }
 
 /// Transcription response.
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct TranscribeResponse {
     pub text: String,
     pub words: Vec<crate::inference::WordInfo>,
@@ -414,54 +414,271 @@ pub async fn transcribe_stream(
 
     // Convert receiver to SSE stream
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx)
-        .map(|result| {
-            let event = match result {
-                Ok(seg) => {
-                    let msg = if seg.is_final {
-                        serde_json::json!({"type": "final", "text": seg.text.as_ref(), "timestamp": seg.timestamp, "words": seg.words.as_ref()})
-                    } else {
-                        serde_json::json!({"type": "partial", "text": seg.text.as_ref(), "timestamp": seg.timestamp, "words": seg.words.as_ref()})
-                    };
-                    Event::default().data(msg.to_string())
-                }
-                Err(_) => {
-                    let msg = serde_json::json!({"type": "error", "message": "Transcription failed.", "code": "inference_error"});
-                    Event::default().data(msg.to_string())
-                }
-            };
-            Ok(event)
-        });
+        .map(|result| Ok(segment_to_event(result)));
 
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+/// Map a transcript segment (or error) into an SSE event. Extracted so the
+/// mapping logic can be unit-tested without spawning a stream or an engine.
+fn segment_to_event(result: Result<crate::inference::TranscriptSegment, String>) -> Event {
+    Event::default().data(segment_to_json_value(result).to_string())
+}
+
+/// Pure JSON mapping — the testable half of [`segment_to_event`].
+fn segment_to_json_value(result: Result<crate::inference::TranscriptSegment, String>) -> serde_json::Value {
+    match result {
+        Ok(seg) => {
+            if seg.is_final {
+                serde_json::json!({"type": "final", "text": seg.text.as_ref(), "timestamp": seg.timestamp, "words": seg.words.as_ref()})
+            } else {
+                serde_json::json!({"type": "partial", "text": seg.text.as_ref(), "timestamp": seg.timestamp, "words": seg.words.as_ref()})
+            }
+        }
+        Err(_) => {
+            serde_json::json!({"type": "error", "message": "Transcription failed.", "code": "inference_error"})
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::inference::{Engine, TranscriptSegment, WordInfo};
+    use axum::body::to_bytes;
+    use std::sync::Arc;
+    use tokio_util::sync::CancellationToken;
+    use tokio_util::task::TaskTracker;
+
+    fn test_state(limits: RuntimeLimits, metrics: Option<Arc<MetricsRegistry>>) -> Arc<AppState> {
+        Arc::new(AppState {
+            engine: Arc::new(Engine::test_stub()),
+            limits,
+            metrics_registry: metrics,
+            shutdown: CancellationToken::new(),
+            tracker: TaskTracker::new(),
+        })
+    }
+
+    // -----------------------------------------------------------------------
+    // 1. Empty body (both endpoints)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_transcribe_empty_body() {
+        let state = test_state(RuntimeLimits::default(), None);
+        let result = transcribe(State(state), Bytes::new()).await;
+        assert!(result.is_err());
+        let resp = result.unwrap_err();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], "empty_body");
+    }
+
+    #[tokio::test]
+    async fn test_stream_empty_body() {
+        let state = test_state(RuntimeLimits::default(), None);
+        let result = transcribe_stream(State(state), Bytes::new()).await;
+        assert!(result.is_err());
+        let resp = result.unwrap_err();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], "empty_body");
+    }
+
+    // -----------------------------------------------------------------------
+    // 2. Payload too large (both endpoints)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_transcribe_payload_too_large() {
+        let limits = RuntimeLimits {
+            body_limit_bytes: 10,
+            ..RuntimeLimits::default()
+        };
+        let state = test_state(limits, None);
+        let result = transcribe(State(state), Bytes::from(vec![0u8; 100])).await;
+        assert!(result.is_err());
+        let resp = result.unwrap_err();
+        assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], "payload_too_large");
+    }
+
+    #[tokio::test]
+    async fn test_stream_payload_too_large() {
+        let limits = RuntimeLimits {
+            body_limit_bytes: 10,
+            ..RuntimeLimits::default()
+        };
+        let state = test_state(limits, None);
+        let result = transcribe_stream(State(state), Bytes::from(vec![0u8; 100])).await;
+        assert!(result.is_err());
+        let resp = result.unwrap_err();
+        assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], "payload_too_large");
+    }
+
+    // -----------------------------------------------------------------------
+    // 3. Pool timeout (both endpoints) — empty pool, advance past 30 s
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_transcribe_pool_timeout() {
+        tokio::time::pause();
+        let state = test_state(RuntimeLimits::default(), None);
+        let handle = tokio::spawn(async move {
+            transcribe(State(state), Bytes::from(vec![1u8])).await
+        });
+        tokio::time::advance(std::time::Duration::from_secs(31)).await;
+        let result = handle.await.unwrap();
+        assert!(result.is_err());
+        let resp = result.unwrap_err();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            resp.headers().get(header::RETRY_AFTER).unwrap(),
+            POOL_RETRY_AFTER_SECS.to_string().as_str()
+        );
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], "timeout");
+        assert_eq!(json["retry_after_ms"], POOL_RETRY_AFTER_MS);
+    }
+
+    #[tokio::test]
+    async fn test_stream_pool_timeout() {
+        tokio::time::pause();
+        let state = test_state(RuntimeLimits::default(), None);
+        let handle = tokio::spawn(async move {
+            transcribe_stream(State(state), Bytes::from(vec![1u8])).await
+        });
+        tokio::time::advance(std::time::Duration::from_secs(31)).await;
+        let result = handle.await.unwrap();
+        assert!(result.is_err());
+        let resp = result.unwrap_err();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            resp.headers().get(header::RETRY_AFTER).unwrap(),
+            POOL_RETRY_AFTER_SECS.to_string().as_str()
+        );
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], "timeout");
+        assert_eq!(json["retry_after_ms"], POOL_RETRY_AFTER_MS);
+    }
+
+    // -----------------------------------------------------------------------
+    // 4. Pool closed (both endpoints)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_transcribe_pool_closed() {
+        let state = test_state(RuntimeLimits::default(), None);
+        state.engine.pool.close();
+        let result = transcribe(State(state), Bytes::from(vec![1u8])).await;
+        assert!(result.is_err());
+        let resp = result.unwrap_err();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], "pool_closed");
+        assert!(json.get("retry_after_ms").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_stream_pool_closed() {
+        let state = test_state(RuntimeLimits::default(), None);
+        state.engine.pool.close();
+        let result = transcribe_stream(State(state), Bytes::from(vec![1u8])).await;
+        assert!(result.is_err());
+        let resp = result.unwrap_err();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], "pool_closed");
+        assert!(json.get("retry_after_ms").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // 5. Metrics endpoint
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_metrics_disabled() {
+        let state = test_state(RuntimeLimits::default(), None);
+        let resp = metrics(State(state)).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], "metrics_disabled");
+    }
+
+    #[tokio::test]
+    async fn test_metrics_enabled() {
+        let registry = Arc::new(MetricsRegistry::new());
+        registry.register_counter("requests_total", "Total requests");
+        registry.counter_inc("requests_total", vec![], 1);
+        let state = test_state(RuntimeLimits::default(), Some(registry));
+        let resp = metrics(State(state)).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let ct = resp.headers().get(header::CONTENT_TYPE).unwrap();
+        assert!(ct.to_str().unwrap().contains("text/plain"));
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        assert!(text.contains("requests_total"));
+    }
+
+    // -----------------------------------------------------------------------
+    // 6. SSE JSON mapping
+    // -----------------------------------------------------------------------
 
     #[test]
-    fn test_health_response_serialization() {
-        let resp = HealthResponse {
-            status: "ok".into(),
-            model: "test".into(),
-            version: "0.3.0".into(),
+    fn test_sse_partial_event() {
+        let seg = TranscriptSegment {
+            text: Arc::new("hello".into()),
+            words: Arc::new(vec![]),
+            is_final: false,
+            timestamp: 1.5,
         };
-        let json = serde_json::to_string(&resp).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(v["status"], "ok");
-        assert_eq!(v["model"], "test");
+        let json = segment_to_json_value(Ok(seg));
+        assert_eq!(json["type"], "partial");
+        assert_eq!(json["text"], "hello");
+        assert_eq!(json["timestamp"], 1.5);
+        assert!(json["words"].is_array());
     }
 
     #[test]
-    fn test_transcribe_response_serialization() {
-        let resp = TranscribeResponse {
-            text: "hello".into(),
-            words: vec![],
-            duration: 1.5,
+    fn test_sse_final_event() {
+        let word = WordInfo {
+            word: "world".into(),
+            start: 0.0,
+            end: 1.0,
+            confidence: 0.95,
+            speaker: None,
         };
-        let json = serde_json::to_string(&resp).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(v["text"], "hello");
-        assert_eq!(v["duration"], 1.5);
+        let seg = TranscriptSegment {
+            text: Arc::new("world".into()),
+            words: Arc::new(vec![word]),
+            is_final: true,
+            timestamp: 2.0,
+        };
+        let json = segment_to_json_value(Ok(seg));
+        assert_eq!(json["type"], "final");
+        assert_eq!(json["text"], "world");
+        let words = json["words"].as_array().unwrap();
+        assert_eq!(words.len(), 1);
+        assert_eq!(words[0]["word"], "world");
+    }
+
+    #[test]
+    fn test_sse_error_event() {
+        let json = segment_to_json_value(Err("boom".into()));
+        assert_eq!(json["type"], "error");
+        assert_eq!(json["code"], "inference_error");
     }
 }

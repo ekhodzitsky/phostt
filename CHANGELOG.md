@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+## [0.2.4] - 2026-04-21
+
+### Added
+
+- **Spec 002** — 13 fast REST handler unit tests (error paths + SSE mapping).
+  No ONNX model required; runs in ~10 ms. Covers `empty_body`,
+  `payload_too_large`, `pool_timeout`, `pool_closed` for both `/v1/transcribe`
+  and `/v1/transcribe/stream`, plus metrics endpoint and SSE JSON mapping.
+
+### Changed
+
+- `tokio` feature set extended with `test-util` (enables
+  `tokio::time::pause`/`advance` in unit tests).
+
 ## [0.2.3] - 2026-04-21
 
 ### Fixed

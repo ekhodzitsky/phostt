@@ -86,6 +86,13 @@ impl Tokenizer {
     pub fn vocab_size(&self) -> usize {
         self.tokens.len()
     }
+
+    /// Build a tokenizer from an in-memory token list. Test-only: avoids
+    /// file I/O and model dependencies.
+    #[cfg(test)]
+    pub fn from_tokens(tokens: Vec<String>, blank_id: usize) -> Self {
+        Self { tokens, blank_id }
+    }
 }
 
 #[cfg(test)]

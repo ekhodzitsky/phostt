@@ -1,6 +1,6 @@
 [package]
 name = "phostt"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2024"
 description = "Local STT server powered by Zipformer-vi RNN-T — on-device Vietnamese speech recognition via ONNX Runtime"
 license = "MIT"
@@ -21,7 +21,7 @@ ffi = ["ort/nnapi"]
 ort = "2.0.0-rc.12"
 
 # Async runtime
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["full", "test-util"] }
 
 # Async MPMC channel — backs the SessionPool (FIFO + close semantics)
 async-channel = "2"

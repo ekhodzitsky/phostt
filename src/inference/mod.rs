@@ -464,6 +464,19 @@ impl Engine {
         self.tokenizer.vocab_size()
     }
 
+    /// Build a test-only engine with an empty pool. Used by server handler
+    /// unit tests so they can exercise guard paths without loading ONNX models.
+    #[cfg(test)]
+    pub fn test_stub() -> Self {
+        Self {
+            pool: Pool::new(vec![]),
+            tokenizer: Tokenizer::from_tokens(vec!["<blk>".into(), "a".into()], 0),
+            mel: MelSpectrogram::new(),
+            #[cfg(feature = "diarization")]
+            speaker_encoder: None,
+        }
+    }
+
     /// Load ONNX models from the given directory and create an inference engine.
     ///
     /// Creates a pool of [`DEFAULT_POOL_SIZE`] session triplets for concurrent inference.
