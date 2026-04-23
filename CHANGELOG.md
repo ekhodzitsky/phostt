@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+## [0.2.6] - 2026-04-21
+
+### Fixed
+
+- **Spec 004** — Eliminated per-step `Vec<f32>` allocations in the greedy decode
+  loop. `run_decoder` and `run_joiner_single` now write into reusable buffers
+  (`&mut Vec<f32>`) instead of returning freshly allocated `Vec`s. Three buffers
+  (`joiner_buf`, `decoder_buf_a`, `decoder_buf_b`) are created once per
+  `greedy_decode` call; `mem::swap` rotates the decoder double-buffer on each
+  non-blank token. For a typical 10-second utterance this removes 250+
+  allocations from the hottest inference path.
+
 ## [0.2.5] - 2026-04-21
 
 ### Added

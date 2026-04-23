@@ -1,6 +1,6 @@
 [package]
 name = "phostt"
-version = "0.2.5"
+version = "0.2.6"
 edition = "2024"
 description = "Local STT server powered by Zipformer-vi RNN-T — on-device Vietnamese speech recognition via ONNX Runtime"
 license = "MIT"

@@ -75,7 +75,9 @@ pub(crate) fn argmax_with_confidence(logits: &[f32], blank_id: usize) -> (usize,
 /// Run the stateless decoder on the current context window.
 /// Input: `decoder_input` `[1, CONTEXT_SIZE]` int64.
 /// Output: `decoder_out` `[1, DECODER_OUT_DIM]` float32, returned owned.
-fn run_decoder(decoder: &mut Session, context: &[i64]) -> Result<Vec<f32>> {
+/// Run the stateless decoder on the current context window, writing the
+/// result into `out` to avoid a per-step allocation.
+fn run_decoder(decoder: &mut Session, context: &[i64], out: &mut Vec<f32>) -> Result<()> {
     debug_assert_eq!(context.len(), CONTEXT_SIZE);
     let input_tensor = TensorRef::from_array_view(([1_usize, CONTEXT_SIZE], context))?;
     let outputs = decoder
@@ -84,17 +86,22 @@ fn run_decoder(decoder: &mut Session, context: &[i64]) -> Result<Vec<f32>> {
     let (_shape, data) = outputs[0]
         .try_extract_tensor::<f32>()
         .context("Failed to extract decoder output")?;
-    Ok(data.to_vec())
+    out.clear();
+    out.extend_from_slice(data);
+    Ok(())
 }
 
 /// Run the joiner on a single (encoder_frame, decoder_frame) pair.
 /// Inputs: encoder_out `[1, ENCODER_OUT_DIM]`, decoder_out `[1, DECODER_OUT_DIM]`.
 /// Output: logits `[1, vocab_size]`, flattened to `Vec<f32>`.
+/// Run the joiner on a single (encoder_frame, decoder_frame) pair,
+/// writing the flattened logits into `out` to avoid a per-step allocation.
 fn run_joiner_single(
     joiner: &mut Session,
     enc_frame: &[f32],
     dec_data: &[f32],
-) -> Result<Vec<f32>> {
+    out: &mut Vec<f32>,
+) -> Result<()> {
     let enc_tensor = TensorRef::from_array_view(([1_usize, ENCODER_OUT_DIM], enc_frame))?;
     let dec_tensor = TensorRef::from_array_view(([1_usize, DECODER_OUT_DIM], dec_data))?;
     let outputs = joiner
@@ -103,9 +110,16 @@ fn run_joiner_single(
     let (_shape, logits) = outputs[0]
         .try_extract_tensor::<f32>()
         .context("Failed to extract joiner output")?;
-    Ok(logits.to_vec())
+    out.clear();
+    out.extend_from_slice(logits);
+    Ok(())
 }
 
+/// RNN-T greedy decode over a frames-first encoder output buffer.
+///
+/// During blank runs the context window does not change, so we keep the
+/// previous `decoder_out` around and skip the decoder call for every blank
+/// frame — that is by far the dominant cost on long silences.
 /// RNN-T greedy decode over a frames-first encoder output buffer.
 ///
 /// During blank runs the context window does not change, so we keep the
@@ -117,6 +131,7 @@ pub fn greedy_decode(
     encoded: &[f32], // [encoded_len, ENCODER_OUT_DIM] flat (frames-first)
     encoded_len: usize,
     blank_id: usize,
+    vocab_size: usize,
     state: &mut DecoderState,
 ) -> Result<DecodeResult> {
     anyhow::ensure!(
@@ -130,12 +145,17 @@ pub fn greedy_decode(
     let mut endpoint_detected = false;
     let mut enc_frame = vec![0.0_f32; ENCODER_OUT_DIM];
 
+    // Reusable buffers: allocated once per decode call, never inside the hot loop.
+    let mut joiner_buf = Vec::with_capacity(vocab_size);
+    let mut decoder_buf_a = Vec::with_capacity(DECODER_OUT_DIM);
+    let mut decoder_buf_b = Vec::with_capacity(DECODER_OUT_DIM);
+
     let mut decoder_calls: u32 = 0;
     let mut joiner_calls: u32 = 0;
 
-    // Prime the decoder with the existing context. After the first call we
-    // refresh `cached_decoder_out` only when we actually push a new token.
-    let mut cached_decoder_out = run_decoder(decoder, &state.tokens)?;
+    // Prime the decoder with the existing context. `decoder_buf_a` holds
+    // the cached decoder output for the first joiner call.
+    run_decoder(decoder, &state.tokens, &mut decoder_buf_a)?;
     decoder_calls += 1;
 
     for t in 0..encoded_len {
@@ -144,8 +164,8 @@ pub fn greedy_decode(
 
         loop {
             joiner_calls += 1;
-            let logits = run_joiner_single(joiner, &enc_frame, &cached_decoder_out)?;
-            let (token, confidence) = argmax_with_confidence(&logits, blank_id);
+            run_joiner_single(joiner, &enc_frame, &decoder_buf_a, &mut joiner_buf)?;
+            let (token, confidence) = argmax_with_confidence(&joiner_buf, blank_id);
 
             if token == blank_id {
                 state.consecutive_blanks += 1;
@@ -170,8 +190,9 @@ pub fn greedy_decode(
             // Real token: slide the context window, refresh decoder out.
             state.consecutive_blanks = 0;
             state.push_token(token as i64);
-            cached_decoder_out = run_decoder(decoder, &state.tokens)?;
+            run_decoder(decoder, &state.tokens, &mut decoder_buf_b)?;
             decoder_calls += 1;
+            std::mem::swap(&mut decoder_buf_a, &mut decoder_buf_b);
             tokens.push(TokenInfo {
                 token_id: token,
                 frame_index: t,

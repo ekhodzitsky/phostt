@@ -1061,6 +1061,7 @@ impl Engine {
             &enc_data_owned,
             enc_len,
             self.tokenizer.blank_id(),
+            self.tokenizer.vocab_size(),
             decoder_state,
         )?;
         tracing::info!(
