@@ -335,22 +335,12 @@ pub async fn run_with_config(
         // so the GC loop exits cleanly on SIGTERM instead of leaking.
         let evict_limiter = limiter.clone();
         let evict_cancel = shutdown_root.clone();
-        tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
-            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            // First tick fires immediately; skip it so the limiter is populated
-            // before the first eviction pass.
-            ticker.tick().await;
-            loop {
-                tokio::select! {
-                    biased;
-                    _ = evict_cancel.cancelled() => break,
-                    _ = ticker.tick() => {
-                        evict_limiter.evict_stale(std::time::Duration::from_secs(300));
-                    }
-                }
-            }
-        });
+        tokio::spawn(rate_limit_eviction_loop(
+            evict_limiter,
+            evict_cancel,
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(300),
+        ));
 
         tracing::info!(
             rpm = config.limits.rate_limit_per_minute,
@@ -396,7 +386,7 @@ pub async fn run_with_config(
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
-    let shutdown_drain_secs = config.limits.shutdown_drain_secs.max(1);
+    let shutdown_drain_secs = shutdown_drain_secs_clamped(config.limits.shutdown_drain_secs);
 
     let shutdown_fut = {
         let shutdown_root = shutdown_root.clone();
@@ -546,6 +536,65 @@ async fn origin_middleware(
     }
 }
 
+/// Background eviction loop for the per-IP rate limiter. Exited cleanly
+/// via `cancel` so the task does not leak across shutdown.
+async fn rate_limit_eviction_loop(
+    limiter: Arc<rate_limit::RateLimiter>,
+    cancel: tokio_util::sync::CancellationToken,
+    interval: std::time::Duration,
+    stale_age: std::time::Duration,
+) {
+    let mut ticker = tokio::time::interval(interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // First tick fires immediately; skip it so the limiter is populated
+    // before the first eviction pass.
+    ticker.tick().await;
+    loop {
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => break,
+            _ = ticker.tick() => {
+                limiter.evict_stale(stale_age);
+            }
+        }
+    }
+}
+
+/// Build the 503 response returned when a WS upgrade is requested while
+/// the server is already shutting down. Extracted so the JSON shape is
+/// defined in one place and unit-testable.
+fn ws_shutdown_response() -> Response {
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        axum::response::Json(serde_json::json!({
+            "error": "Server shutting down",
+            "code": "shutting_down",
+        })),
+    )
+        .into_response()
+}
+
+/// Clamp `shutdown_drain_secs` to a minimum of 1 so the drain window
+/// is never zero-length (which would immediately kill in-flight tasks).
+fn shutdown_drain_secs_clamped(secs: u64) -> u64 {
+    secs.max(1)
+}
+
+/// Compute the wall-clock deadline for a WebSocket session.
+/// `max_session_secs == 0` disables the cap by parking the deadline far in
+/// the future (`u32::MAX` seconds ≈ 136 years) so `sleep_until` never
+/// fires in practice.
+fn session_deadline_instant(max_session_secs: u64) -> tokio::time::Instant {
+    tokio::time::Instant::now()
+        + if max_session_secs == 0 {
+            std::time::Duration::from_secs(u32::MAX as u64)
+        } else {
+            std::time::Duration::from_secs(max_session_secs)
+        }
+}
+
 async fn ws_handler(
     ws: WebSocketUpgrade,
     axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<SocketAddr>,
@@ -559,17 +608,8 @@ async fn ws_handler(
     // a plain 503 with the `shutting_down` error code keeps the surface
     // consistent with the pool-saturation 503.
     if state.shutdown.is_cancelled() {
-        use axum::http::StatusCode;
-        use axum::response::IntoResponse;
         tracing::warn!(peer = %peer, "Rejecting WS upgrade after shutdown");
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            axum::response::Json(serde_json::json!({
-                "error": "Server shutting down",
-                "code": "shutting_down",
-            })),
-        )
-            .into_response();
+        return ws_shutdown_response();
     }
     let max_bytes = state.limits.ws_frame_max_bytes;
     let state_cloned = state.clone();
@@ -603,16 +643,7 @@ async fn ws_handler_legacy(
         "WebSocket client connected to deprecated /ws path — switch to /v1/ws before v1.0"
     );
     if state.shutdown.is_cancelled() {
-        use axum::http::StatusCode;
-        use axum::response::IntoResponse;
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            axum::response::Json(serde_json::json!({
-                "error": "Server shutting down",
-                "code": "shutting_down",
-            })),
-        )
-            .into_response();
+        return ws_shutdown_response();
     }
     let max_bytes = state.limits.ws_frame_max_bytes;
     let state_cloned = state.clone();
@@ -1059,16 +1090,8 @@ async fn handle_ws_inner(
 
     let idle_timeout = std::time::Duration::from_secs(limits.idle_timeout_secs);
 
-    // V1-04: wall-clock deadline independent of `idle_timeout`. Setting
-    // `max_session_secs = 0` disables the cap by parking the deadline far in
-    // the future (u64::MAX / 2 ≈ 292 billion years) so `sleep_until` never
-    // fires — callers who deliberately want unlimited sessions don't pay for
-    // an additional branch in the select.
-    let session_deadline = if limits.max_session_secs == 0 {
-        tokio::time::Instant::now() + std::time::Duration::from_secs(u64::MAX / 2)
-    } else {
-        tokio::time::Instant::now() + std::time::Duration::from_secs(limits.max_session_secs)
-    };
+    // V1-04: wall-clock deadline independent of `idle_timeout`.
+    let session_deadline = session_deadline_instant(limits.max_session_secs);
 
     let result: Result<()> = loop {
         // Fast-path deadline / cancel check: if a client streams frames
@@ -1514,5 +1537,143 @@ mod tests {
             triplet_marker, "pool_slot/taken",
             "triplet marker must survive panic"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Graceful shutdown helpers
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_shutdown_drain_secs_zero_clamped_to_one() {
+        assert_eq!(shutdown_drain_secs_clamped(0), 1);
+        assert_eq!(shutdown_drain_secs_clamped(1), 1);
+        assert_eq!(shutdown_drain_secs_clamped(10), 10);
+    }
+
+    #[test]
+    fn test_session_deadline_disabled_is_far_future() {
+        let now = tokio::time::Instant::now();
+        let deadline = session_deadline_instant(0);
+        assert!(deadline > now + std::time::Duration::from_secs(1_000_000_000));
+        // Verify it does not overflow (regression guard for the old u64::MAX/2 value).
+        let _ = deadline - now;
+    }
+
+    #[test]
+    fn test_session_deadline_enabled_is_near_future() {
+        let now = tokio::time::Instant::now();
+        let deadline = session_deadline_instant(60);
+        let diff = deadline - now;
+        assert!(diff >= std::time::Duration::from_secs(59));
+        assert!(diff <= std::time::Duration::from_secs(61));
+    }
+
+    #[tokio::test]
+    async fn test_ws_shutdown_response_status_and_code() {
+        let resp = ws_shutdown_response();
+        assert_eq!(resp.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
+        // Parse the JSON body.
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["code"], "shutting_down");
+    }
+
+    #[tokio::test]
+    async fn test_rate_limit_eviction_loop_exits_when_cancelled() {
+        let limiter = Arc::new(rate_limit::RateLimiter::new(10, 10));
+        let cancel = tokio_util::sync::CancellationToken::new();
+        cancel.cancel(); // already cancelled before loop starts
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            rate_limit_eviction_loop(
+                limiter,
+                cancel,
+                std::time::Duration::from_secs(60),
+                std::time::Duration::from_secs(300),
+            ),
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "eviction loop must exit immediately when cancelled"
+        );
+    }
+
+    /// End-to-end test of the WS pre-checkout cancel path. Uses a real TCP
+    /// listener and `tokio_tungstenite` client, but no ONNX model — the engine
+    /// stub has an empty pool so `checkout()` blocks forever; cancelling the
+    /// token while the client is connected causes `handle_ws` to send
+    /// `Close(1001)`.
+    #[tokio::test]
+    async fn test_ws_cancel_before_checkout_sends_close_1001() {
+        use axum::Router;
+        use axum::routing::get;
+        use futures_util::StreamExt;
+        use tokio_tungstenite::tungstenite::Message;
+
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let engine = crate::inference::Engine::test_stub();
+        let state = Arc::new(http::AppState {
+            engine: Arc::new(engine),
+            limits: RuntimeLimits::default(),
+            metrics_registry: None,
+            shutdown: cancel.clone(),
+            tracker: tokio_util::task::TaskTracker::new(),
+        });
+
+        let app = Router::new()
+            .route("/v1/ws", get(ws_handler))
+            .with_state(state);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let _ = axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = shutdown_rx.await;
+            })
+            .await;
+        });
+
+        // Give the server a moment to bind.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let url = format!("ws://{addr}/v1/ws");
+        let (mut ws, _) = tokio_tungstenite::connect_async(&url)
+            .await
+            .expect("WebSocket handshake should succeed");
+
+        // Server is now inside `handle_ws`, blocked on the empty pool.
+        // Cancelling the token must win the `select!` and send Close(1001).
+        cancel.cancel();
+
+        let msg = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            ws.next(),
+        )
+        .await
+        .expect("should receive a message within 5s")
+        .expect("stream should not end")
+        .expect("message should not be an error");
+
+        if let Message::Close(Some(frame)) = msg {
+            assert_eq!(
+                u16::from(frame.code),
+                1001,
+                "expected Close(1001) on pre-checkout cancel, got code {}",
+                u16::from(frame.code)
+            );
+        } else {
+            panic!("expected Close(1001) on pre-checkout cancel, got {msg:?}");
+        }
+
+        let _ = shutdown_tx.send(());
     }
 }

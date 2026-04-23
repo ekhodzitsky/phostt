@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+## [0.2.7] - 2026-04-21
+
+### Added
+
+- **Spec 005** — Graceful shutdown unit tests. Extracted pure helpers
+  `ws_shutdown_response()` and `compute_session_deadline()` from WebSocket
+  handlers for testability. Added 5 fast unit tests covering drain clamping,
+  session deadline overflow safety, shutdown response shape, and eviction
+  loop cancellation. Added 1 lightweight async test (`< 100 ms`) that
+  exercises the pre-checkout cancel path with a real TCP socket and
+  `tokio_tungstenite` client but no ONNX model load. Total test count: 121.
+
 ## [0.2.6] - 2026-04-21
 
 ### Fixed
