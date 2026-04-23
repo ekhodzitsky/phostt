@@ -157,7 +157,9 @@ No code changes are required to switch between EPs; `ort` selects the best avail
 
 ## Kotlin / JNI Bridge Skeleton
 
-The skeleton lives at [`ffi/android/PhosttBridge.kt`](ffi/android/PhosttBridge.kt). A typical usage flow looks like this:
+The skeleton lives at [`ffi/android/PhosttBridge.kt`](ffi/android/PhosttBridge.kt).
+
+### File transcription
 
 ```kotlin
 class MainActivity : AppCompatActivity() {
@@ -187,6 +189,53 @@ class MainActivity : AppCompatActivity() {
             enginePtr = 0L
         }
         super.onDestroy()
+    }
+}
+```
+
+### Real-time streaming
+
+```kotlin
+class StreamingActivity : AppCompatActivity() {
+
+    private var enginePtr: Long = 0L
+    private var streamPtr: Long = 0L
+    private val audioBuffer = ByteArray(16000 * 2) // 1 second of 16 kHz PCM16
+
+    fun startStreaming() {
+        val modelDir = File(filesDir, "phostt_models")
+        enginePtr = PhosttBridge.engineNew(modelDir.absolutePath)
+        if (enginePtr == 0L) { /* handle error */ return }
+
+        streamPtr = PhosttBridge.streamNew(enginePtr)
+        if (streamPtr == 0L) { /* handle error */ return }
+
+        // Start AudioRecord in a background thread...
+    }
+
+    fun onAudioChunk(pcm16: ByteArray, sampleRate: Int) {
+        if (streamPtr == 0L) return
+        val json = PhosttBridge.streamProcessChunk(enginePtr, streamPtr, pcm16, sampleRate)
+        val segments = JSONArray(json)
+        for (i in 0 until segments.length()) {
+            val seg = segments.getJSONObject(i)
+            val text = seg.getString("text")
+            val isFinal = seg.getString("type") == "final"
+            runOnUiThread { updateTranscript(text, isFinal) }
+        }
+    }
+
+    fun stopStreaming() {
+        if (streamPtr != 0L) {
+            val finalJson = PhosttBridge.streamFlush(enginePtr, streamPtr)
+            // ...process final segments...
+            PhosttBridge.streamFree(streamPtr)
+            streamPtr = 0L
+        }
+        if (enginePtr != 0L) {
+            PhosttBridge.engineFree(enginePtr)
+            enginePtr = 0L
+        }
     }
 }
 ```
@@ -225,15 +274,9 @@ Tips to reduce binary size:
 
 1. **Server code is excluded** — The FFI build only exposes `phostt::inference::Engine`. The WebSocket server, REST handlers, rate limiting, and `tokio` runtime with `rt-multi-thread` are compiled out when used as a library. They still exist in the server binary (`cargo build --bin phostt`).
 
-2. **Synchronous transcription only** — `phostt_transcribe_file` blocks the calling thread while inference runs. Call it from a Kotlin coroutine (`withContext(Dispatchers.IO)`) or `AsyncTask` so the UI thread stays responsive.
+2. **Synchronous transcription** — `phostt_transcribe_file` blocks the calling thread while inference runs. Call it from a Kotlin coroutine (`withContext(Dispatchers.IO)`) or `AsyncTask` so the UI thread stays responsive.
 
-3. **Streaming API not yet exposed** — `Engine::process_chunk` (real-time microphone streaming) is available in Rust but not yet wrapped in the FFI layer. A future iteration will add:
-   - `phostt_stream_new(engine)` → stream handle
-   - `phostt_stream_feed(handle, pcm_bytes, len)`
-   - `phostt_stream_read(handle)` → `TranscriptSegment` JSON
-   - `phostt_stream_free(handle)`
-
-4. **No Java exception translation** — Rust errors are logged and returned as `NULL` / empty string. The Kotlin side should treat `engineNew == 0L` or `transcribeFile == ""` as failure and surface a generic error message.
+3. **No Java exception translation** — Rust errors are logged and returned as `NULL` / empty string. The Kotlin side should treat `engineNew == 0L`, `streamNew == 0L`, or empty string results as failure and surface a generic error message.
 
 5. **Model directory layout is fixed** — `Engine::load` expects exactly the filenames from the sherpa-onnx release (`encoder.int8.onnx`, `decoder.onnx`, `joiner.int8.onnx`, `bpe.model`, `tokens.txt`). Do not rename them.
 
@@ -244,7 +287,7 @@ Tips to reduce binary size:
 1. [ ] Write a complete Android sample app (`android/` module) with:
    - `MainActivity` + `ViewModel` + coroutines
    - Audio recording via `AudioRecord` (16 kHz, mono, 16-bit PCM)
-   - Real-time streaming FFI bindings (stretch goal)
+   - Real-time streaming FFI bindings
 2. [ ] Add GitHub Actions workflow that builds `libphostt.so` for all four ABIs on every release.
 3. [ ] Publish the Kotlin bridge as a small Maven artifact (`com.phostt:phostt-android:0.1.0`) so downstream apps only need a Gradle dependency.
 4. [ ] Investigate [Oboe](https://github.com/google/oboe) for low-latency audio capture on the native side.

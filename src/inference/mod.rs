@@ -1192,7 +1192,7 @@ pub struct TranscribeResult {
 ///
 /// Partial segments (`is_final == false`) represent interim results that may change.
 /// Final segments (`is_final == true`) represent completed utterances after endpointing.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 #[non_exhaustive]
 pub struct TranscriptSegment {
     /// Recognized text for this segment.

@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+## [0.2.5] - 2026-04-21
+
+### Added
+
+- **Spec 003** — Android streaming FFI. Four new C-ABI exports:
+  - `phostt_stream_new(engine)` — checkout triplet + create `StreamingState`
+  - `phostt_stream_process_chunk(engine, stream, pcm16_bytes, len, sample_rate)` —
+    convert PCM16 → f32, resample if needed, run `process_chunk`, return JSON array
+  - `phostt_stream_flush(engine, stream)` — return final segment(s) as JSON
+  - `phostt_stream_free(stream)` — return triplet to pool
+- Kotlin bridge (`PhosttBridge.kt`) updated with `streamNew`,
+  `streamProcessChunk`, `streamFlush`, `streamFree`.
+- `tests/ffi_streaming.rs` — `#[ignore]` integration tests for happy path and
+  48 kHz resample path.
+- `#[derive(Serialize)]` on `TranscriptSegment` (enables JSON serialization in
+  FFI and future protocol boundaries).
+
+### Changed
+
+- `PhosttEngine` gained `pub fn new(engine: Engine)` constructor.
+
 ## [0.2.4] - 2026-04-21
 
 ### Added
