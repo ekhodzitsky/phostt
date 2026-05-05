@@ -29,12 +29,15 @@ Tracker for remaining work. Current state:
 - [ ] `Formula/phostt.rb`: replace placeholder `sha256` after next signed release tag
 
 ### Runtime verification (needs GPU hardware)
+- [x] Smoke test harness for CUDA / CoreML EP (`tests/ep_smoke.rs`) — run manually on target hardware
 - [ ] Confirm `--features cuda` / `--features coreml` link and run with Zipformer-vi tensor shapes
 - [ ] Verify `RuntimeLimits::shutdown_drain_secs` semantics with the slower decoder loop
 
 ### Quality tracking
-- [ ] WER benchmark on public Vietnamese test set (VLSP or FLEURS) for CI regression tracking
+- [x] FLEURS Vietnamese WER benchmark (`tests/fleurs_wer.rs` + `scripts/prepare_fleurs_benchmark.py`)
+- [ ] Tune `MAX_MEAN_WER` threshold after first run on reference hardware
 
 ### Mobile / FFI
+- [x] FFI streaming stress test (`tests/ffi_stress.rs`) — configurable duration & parallelism
 - [ ] Android streaming FFI stress test on physical device
 - [ ] iOS build verification (CoreML feature)
