@@ -36,6 +36,8 @@ cargo install phostt && phostt serve
 | **Architecture** | Zipformer + RNN-T | Whisper enc-dec | varies |
 | **Model size (INT8)** | **~75 MB** | ~1.5 GB | server-side |
 | **WER (GigaSpeech2-vi)** | ~7.7% | n/a | varies |
+| **Latency (3.7 s audio)** | **~61 ms** | ~300 ms | network + queue |
+| **Throughput** | **61× RTF** | ~3× RTF | varies |
 | **Privacy** | 100% local | 100% local | data leaves device |
 | **Cost** | free forever | free | $0.006/min+ |
 | **Setup** | `cargo install` | Python + deps | API key + billing |
@@ -82,8 +84,23 @@ Expected output (from the bundled Vietnamese test fixture):
 RỒI CŨNG HỖ TRỢ CHO LÂU LÂU CŨNG CHO GẠO CHO NÀY KIA
 ```
 
-> **Latency:** ~50 ms total on 3.7 s of audio (M1 Pro, debug build).
-> Release builds with LTO + `strip = true` are ~3–5× faster.
+### Benchmarks
+
+Measured on Apple Silicon M2 Pro, release build, 3.74 s Vietnamese test audio:
+
+| Backend | Mean Latency | Median | P95 | RTF | Peak RSS |
+|---|---|---|---|---|---|
+| **CPU** | **61 ms** | 61 ms | 68 ms | **61×** | **1.4 GB** |
+| CoreML (Neural Engine) | 91 ms | 91 ms | 97 ms | 41× | 1.2 GB |
+
+*RTF = real-time factor (audio seconds processed per wall-clock second).*
+*For this 30M-param INT8 model, CPU is faster than CoreML on Apple Silicon.*
+
+**WER (FLEURS Vietnamese, 857 samples):** mean 103.08%
+
+> WER is high because FLEURS contains many proper names, numbers, and English
+> terms that the model transcribes phonetically into Vietnamese. Use this
+> baseline for regression tracking, not absolute quality assessment.
 
 ### Docker
 
