@@ -1,0 +1,83 @@
+name: Benchmark
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Run every Sunday at 03:00 UTC
+    - cron: '0 3 * * 0'
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: write
+
+jobs:
+  benchmark-macos:
+    runs-on: macos-14
+    name: Benchmark (macOS)
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache model
+        id: cache-model
+        uses: actions/cache@v4
+        with:
+          path: ~/.phostt/models
+          key: phostt-model-v3-onnx-${{ hashFiles('src/model/mod.rs') }}
+
+      - name: Download model
+        if: steps.cache-model.outputs.cache-hit != 'true'
+        run: cargo run --release -- download
+
+      - name: Run CPU benchmark
+        id: cpu
+        run: |
+          cargo test --release --test benchmark_report -- --ignored --nocapture 2>&1 | tee /tmp/cpu_benchmark.txt
+
+      - name: Run CoreML benchmark
+        id: coreml
+        run: |
+          cargo test --release --test benchmark_report --features coreml -- --ignored --nocapture 2>&1 | tee /tmp/coreml_benchmark.txt
+
+      - name: Parse results and update BENCHMARKS.md
+        run: |
+          COMMIT=$(git rev-parse --short HEAD)
+          DATE=$(date -u +%Y-%m-%d)
+
+          CPU_LATENCY=$(grep "Mean latency" /tmp/cpu_benchmark.txt | awk '{print $3}')
+          CPU_RTF=$(grep "RTF" /tmp/cpu_benchmark.txt | awk '{print $4}')
+
+          COREML_LATENCY=$(grep "Mean latency" /tmp/coreml_benchmark.txt | awk '{print $3}')
+          COREML_RTF=$(grep "RTF" /tmp/coreml_benchmark.txt | awk '{print $4}')
+
+          cat >> BENCHMARKS.md << EOF
+
+## ${DATE} (commit ${COMMIT})
+
+### macOS-14 (Apple Silicon)
+
+| Backend | Mean Latency | RTF |
+|---|---|---|
+| CPU | ${CPU_LATENCY} ms | ${CPU_RTF} |
+| CoreML | ${COREML_LATENCY} ms | ${COREML_RTF} |
+EOF
+
+      - name: Commit benchmark results
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "benchmark: auto-update BENCHMARKS.md [skip ci]"
+          file_pattern: BENCHMARKS.md
