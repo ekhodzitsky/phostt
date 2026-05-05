@@ -361,4 +361,67 @@ mod tests {
             "fresh bucket must survive eviction"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // Middleware integration
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_rate_limit_middleware_blocks_over_limit() {
+        use axum::Router;
+        use axum::routing::get;
+
+        let limiter = Arc::new(RateLimiter::new(60, 1)); // burst = 1
+        let app =
+            Router::new()
+                .route("/test", get(|| async { "ok" }))
+                .layer(axum::middleware::from_fn(move |req, next| {
+                    let limiter = limiter.clone();
+                    async move { rate_limit_middleware(limiter, req, next).await }
+                }));
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let client = reqwest::Client::new();
+
+        // First request consumes the single burst token.
+        let r1 = client
+            .get(format!("http://127.0.0.1:{port}/test"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r1.status(), 200, "first request within burst must succeed");
+
+        // Second request should be blocked because the bucket is empty and
+        // no time has elapsed for a refill.
+        let r2 = client
+            .get(format!("http://127.0.0.1:{port}/test"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            r2.status(),
+            429,
+            "second request over burst must be rate-limited"
+        );
+        assert_eq!(
+            r2.headers()
+                .get(axum::http::header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok()),
+            Some("60"),
+            "429 response must include Retry-After: 60"
+        );
+
+        let body_text = r2.text().await.unwrap();
+        let body: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+        assert_eq!(
+            body["code"], "rate_limited",
+            "error code must be 'rate_limited'"
+        );
+    }
 }

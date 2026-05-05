@@ -83,6 +83,7 @@ pub enum ClientMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::inference::TARGET_SAMPLE_RATE;
 
     #[test]
     fn test_protocol_version_constant() {
@@ -186,7 +187,7 @@ mod tests {
             model: "test".into(),
             sample_rate: 48000,
             version: "1.0".into(),
-            supported_rates: vec![8000, 16000, 24000, 44100, 48000],
+            supported_rates: vec![8000, TARGET_SAMPLE_RATE, 24000, 44100, 48000],
             diarization: false,
         };
         let json = serde_json::to_string(&msg).unwrap();

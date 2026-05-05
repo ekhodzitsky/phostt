@@ -136,6 +136,28 @@ fn api_pool_closed_error() -> ApiError {
         .into_response()
 }
 
+/// Checkout a session triplet from the engine pool with a 30-second timeout.
+/// Returns the owned triplet and its reservation so it can be moved into
+/// `spawn_blocking` and checked back in afterwards.
+async fn checkout_triplet(
+    engine: &std::sync::Arc<Engine>,
+) -> Result<
+    (
+        crate::inference::SessionTriplet,
+        crate::inference::OwnedReservation<crate::inference::SessionTriplet>,
+    ),
+    ApiError,
+> {
+    match tokio::time::timeout(std::time::Duration::from_secs(30), engine.pool.checkout()).await {
+        Ok(Ok(guard)) => {
+            let (triplet, reservation) = guard.into_owned();
+            Ok((triplet, reservation))
+        }
+        Ok(Err(_pool_closed)) => Err(api_pool_closed_error()),
+        Err(_timeout) => Err(api_timeout_error()),
+    }
+}
+
 /// GET /health — health check for monitoring and Docker HEALTHCHECK.
 pub async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
     let _ = &state.engine;
@@ -159,7 +181,7 @@ pub async fn models(State(state): State<Arc<AppState>>) -> Json<ModelInfo> {
         version: env!("CARGO_PKG_VERSION").into(),
         encoder: "int8".into(),
         vocab_size: engine.vocab_size(),
-        sample_rate: 16000,
+        sample_rate: crate::inference::TARGET_SAMPLE_RATE,
         pool_size: engine.pool.total(),
         pool_available: engine.pool.available(),
         supported_formats: vec![
@@ -205,20 +227,7 @@ pub async fn transcribe(
         ));
     }
 
-    // Checkout a session triplet from the pool (blocks if none available).
-    // The guard's lifetime is stripped via `into_owned` so the triplet can
-    // travel through `spawn_blocking`; the reservation handles checkin.
-    let guard = match tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        state.engine.pool.checkout(),
-    )
-    .await
-    {
-        Ok(Ok(guard)) => guard,
-        Ok(Err(_pool_closed)) => return Err(api_pool_closed_error()),
-        Err(_timeout) => return Err(api_timeout_error()),
-    };
-    let (triplet, reservation) = guard.into_owned();
+    let (triplet, reservation) = checkout_triplet(&state.engine).await?;
 
     let engine = state.engine.clone();
 
@@ -304,19 +313,7 @@ pub async fn transcribe_stream(
         ));
     }
 
-    // Checkout a session triplet from the pool. Strip the lifetime via
-    // `into_owned` so the triplet can travel through `spawn_blocking`.
-    let guard = match tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        state.engine.pool.checkout(),
-    )
-    .await
-    {
-        Ok(Ok(guard)) => guard,
-        Ok(Err(_pool_closed)) => return Err(api_pool_closed_error()),
-        Err(_timeout) => return Err(api_timeout_error()),
-    };
-    let (triplet, reservation) = guard.into_owned();
+    let (triplet, reservation) = checkout_triplet(&state.engine).await?;
 
     // Create mpsc channel for streaming segments from spawn_blocking to SSE
     let (tx, rx) =
@@ -341,7 +338,7 @@ pub async fn transcribe_stream(
                     return;
                 }
             };
-            let chunk_size = 16000; // 1 second at 16kHz
+            let chunk_size = crate::inference::TARGET_SAMPLE_RATE as usize; // 1 second at 16kHz
             let mut chunk_buf: Vec<f32> = Vec::with_capacity(chunk_size);
 
             // Zero-copy streaming decode: symphonia feeds decoded samples

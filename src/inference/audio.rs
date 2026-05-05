@@ -9,10 +9,10 @@ use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
-use super::{HOP_LENGTH, N_FFT};
+use super::{HOP_LENGTH, N_FFT, TARGET_SAMPLE_RATE};
 
 #[allow(dead_code)]
-const MAX_BUFFER_SAMPLES: usize = 16000 * 5; // 5 seconds at 16kHz
+const MAX_BUFFER_SAMPLES: usize = TARGET_SAMPLE_RATE as usize * 5; // 5 seconds at 16kHz
 const MAX_DURATION_S: f64 = 600.0; // 10 minutes
 
 /// A [`MediaSource`] that borrows its data from a reference-counted [`Bytes`]
@@ -193,7 +193,7 @@ where
     // For non-16kHz sources we accumulate into a scratch buffer and resample
     // in chunks. For 16kHz we bypass resampling entirely.
     let mut resample_buf: Vec<f32> = Vec::new();
-    let needs_resample = sample_rate != 16000;
+    let needs_resample = sample_rate != TARGET_SAMPLE_RATE;
 
     loop {
         let packet = match format.next_packet() {
@@ -245,8 +245,8 @@ where
             let chunk_samples = sample_rate as usize;
             while resample_buf.len() >= chunk_samples {
                 let chunk = resample_buf.drain(..chunk_samples).collect::<Vec<_>>();
-                let resampled =
-                    resample(&chunk, sample_rate, 16000).context("Resampling failed")?;
+                let resampled = resample(&chunk, sample_rate, TARGET_SAMPLE_RATE)
+                    .context("Resampling failed")?;
                 on_chunk(&resampled)?;
             }
         } else {
@@ -256,7 +256,8 @@ where
 
     // Flush any remaining resample buffer
     if needs_resample && !resample_buf.is_empty() {
-        let resampled = resample(&resample_buf, sample_rate, 16000).context("Resampling failed")?;
+        let resampled = resample(&resample_buf, sample_rate, TARGET_SAMPLE_RATE)
+            .context("Resampling failed")?;
         on_chunk(&resampled)?;
     }
 
@@ -352,8 +353,9 @@ fn decode_audio_inner(mss: MediaSourceStream, hint: Hint, source_label: &str) ->
         duration_s
     );
 
-    if sample_rate != 16000 {
-        all_samples = resample(&all_samples, sample_rate, 16000).context("Resampling failed")?;
+    if sample_rate != TARGET_SAMPLE_RATE {
+        all_samples =
+            resample(&all_samples, sample_rate, TARGET_SAMPLE_RATE).context("Resampling failed")?;
         tracing::info!("Resampled to 16kHz: {} samples", all_samples.len());
     }
 
@@ -446,7 +448,7 @@ mod tests {
     #[test]
     fn test_decode_silence_yields_finite_samples() {
         // 1 second of silence at 16kHz, mono, 16-bit PCM
-        let num_samples = 16000;
+        let num_samples = TARGET_SAMPLE_RATE as usize;
         let data_size: u32 = (num_samples * 2) as u32;
         let file_size: u32 = 44 + data_size;
 
@@ -458,8 +460,8 @@ mod tests {
         wav.extend_from_slice(&16u32.to_le_bytes());
         wav.extend_from_slice(&1u16.to_le_bytes());
         wav.extend_from_slice(&1u16.to_le_bytes());
-        wav.extend_from_slice(&16000u32.to_le_bytes());
-        wav.extend_from_slice(&(16000u32 * 2).to_le_bytes());
+        wav.extend_from_slice(&TARGET_SAMPLE_RATE.to_le_bytes());
+        wav.extend_from_slice(&(TARGET_SAMPLE_RATE * 2).to_le_bytes());
         wav.extend_from_slice(&2u16.to_le_bytes());
         wav.extend_from_slice(&16u16.to_le_bytes());
         wav.extend_from_slice(b"data");
@@ -469,7 +471,7 @@ mod tests {
         }
 
         let samples = decode_audio_bytes(&wav).expect("Should decode silence WAV");
-        assert_eq!(samples.len(), 16000);
+        assert_eq!(samples.len(), TARGET_SAMPLE_RATE as usize);
         for &s in &samples {
             assert!(s.is_finite(), "expected finite sample, got {s}");
             assert_eq!(s, 0.0, "silence should decode to 0.0");
@@ -479,7 +481,7 @@ mod tests {
     #[test]
     fn test_decode_duration_cap_blocks_long_files() {
         // 11 minutes of silence at 16kHz
-        let num_samples: usize = (16000.0 * (MAX_DURATION_S + 60.0)) as usize;
+        let num_samples: usize = (TARGET_SAMPLE_RATE as f64 * (MAX_DURATION_S + 60.0)) as usize;
         let data_size: u32 = (num_samples * 2) as u32;
         let file_size: u32 = 44 + data_size;
 
@@ -491,8 +493,8 @@ mod tests {
         wav.extend_from_slice(&16u32.to_le_bytes());
         wav.extend_from_slice(&1u16.to_le_bytes());
         wav.extend_from_slice(&1u16.to_le_bytes());
-        wav.extend_from_slice(&16000u32.to_le_bytes());
-        wav.extend_from_slice(&(16000u32 * 2).to_le_bytes());
+        wav.extend_from_slice(&TARGET_SAMPLE_RATE.to_le_bytes());
+        wav.extend_from_slice(&(TARGET_SAMPLE_RATE * 2).to_le_bytes());
         wav.extend_from_slice(&2u16.to_le_bytes());
         wav.extend_from_slice(&16u16.to_le_bytes());
         wav.extend_from_slice(b"data");
@@ -513,7 +515,7 @@ mod tests {
 
     #[test]
     fn test_decode_shared_bytes_matches_decode_bytes() {
-        let num_samples = 16000;
+        let num_samples = TARGET_SAMPLE_RATE as usize;
         let data_size: u32 = (num_samples * 2) as u32;
         let file_size: u32 = 44 + data_size;
 
@@ -525,15 +527,16 @@ mod tests {
         wav.extend_from_slice(&16u32.to_le_bytes());
         wav.extend_from_slice(&1u16.to_le_bytes());
         wav.extend_from_slice(&1u16.to_le_bytes());
-        wav.extend_from_slice(&16000u32.to_le_bytes());
-        wav.extend_from_slice(&(16000u32 * 2).to_le_bytes());
+        wav.extend_from_slice(&TARGET_SAMPLE_RATE.to_le_bytes());
+        wav.extend_from_slice(&(TARGET_SAMPLE_RATE * 2).to_le_bytes());
         wav.extend_from_slice(&2u16.to_le_bytes());
         wav.extend_from_slice(&16u16.to_le_bytes());
         wav.extend_from_slice(b"data");
         wav.extend_from_slice(&data_size.to_le_bytes());
         for i in 0..num_samples {
             let sample =
-                ((440.0 * 2.0 * std::f64::consts::PI * i as f64 / 16000.0).sin() * 1000.0) as i16;
+                ((440.0 * 2.0 * std::f64::consts::PI * i as f64 / TARGET_SAMPLE_RATE as f64).sin()
+                    * 1000.0) as i16;
             wav.extend_from_slice(&sample.to_le_bytes());
         }
 
@@ -547,8 +550,10 @@ mod tests {
 
     #[test]
     fn test_resample_identity_same_rate() {
-        let samples: Vec<f32> = (0..16000).map(|i| i as f32 / 16000.0).collect();
-        let result = resample(&samples, 16000, 16000).unwrap();
+        let samples: Vec<f32> = (0..TARGET_SAMPLE_RATE as usize)
+            .map(|i| i as f32 / TARGET_SAMPLE_RATE as f32)
+            .collect();
+        let result = resample(&samples, TARGET_SAMPLE_RATE, TARGET_SAMPLE_RATE).unwrap();
         assert_eq!(result.len(), samples.len());
         for (a, b) in samples.iter().zip(result.iter()) {
             assert!(
@@ -564,11 +569,12 @@ mod tests {
         let samples_48k: Vec<f32> = (0..48000)
             .map(|i| (440.0 * 2.0 * std::f64::consts::PI * i as f64 / 48000.0).sin() as f32)
             .collect();
-        let result = resample(&samples_48k, 48000, 16000).unwrap();
+        let result = resample(&samples_48k, 48000, TARGET_SAMPLE_RATE).unwrap();
         // Should be approximately 1 second at 16kHz
         assert!(
-            (result.len() as i64 - 16000).abs() < 100,
-            "Expected ~16000 samples, got {}",
+            (result.len() as i64 - TARGET_SAMPLE_RATE as i64).abs() < 100,
+            "Expected ~{} samples, got {}",
+            TARGET_SAMPLE_RATE,
             result.len()
         );
     }
@@ -576,7 +582,7 @@ mod tests {
     #[test]
     fn test_decode_streaming_matches_batch() {
         // 1 second of 440Hz sine at 16kHz
-        let num_samples = 16000;
+        let num_samples = TARGET_SAMPLE_RATE as usize;
         let data_size: u32 = (num_samples * 2) as u32;
         let file_size: u32 = 44 + data_size;
 
@@ -588,15 +594,16 @@ mod tests {
         wav.extend_from_slice(&16u32.to_le_bytes());
         wav.extend_from_slice(&1u16.to_le_bytes());
         wav.extend_from_slice(&1u16.to_le_bytes());
-        wav.extend_from_slice(&16000u32.to_le_bytes());
-        wav.extend_from_slice(&(16000u32 * 2).to_le_bytes());
+        wav.extend_from_slice(&TARGET_SAMPLE_RATE.to_le_bytes());
+        wav.extend_from_slice(&(TARGET_SAMPLE_RATE * 2).to_le_bytes());
         wav.extend_from_slice(&2u16.to_le_bytes());
         wav.extend_from_slice(&16u16.to_le_bytes());
         wav.extend_from_slice(b"data");
         wav.extend_from_slice(&data_size.to_le_bytes());
         for i in 0..num_samples {
             let sample =
-                ((440.0 * 2.0 * std::f64::consts::PI * i as f64 / 16000.0).sin() * 1000.0) as i16;
+                ((440.0 * 2.0 * std::f64::consts::PI * i as f64 / TARGET_SAMPLE_RATE as f64).sin()
+                    * 1000.0) as i16;
             wav.extend_from_slice(&sample.to_le_bytes());
         }
 

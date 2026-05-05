@@ -15,7 +15,9 @@
 use kaldi_native_fbank::fbank::{FbankComputer, FbankOptions};
 use kaldi_native_fbank::online::{FeatureComputer, OnlineFeature};
 
-const SAMPLE_RATE: f32 = 16000.0;
+use super::TARGET_SAMPLE_RATE;
+
+const SAMPLE_RATE: f32 = TARGET_SAMPLE_RATE as f32;
 
 pub struct MelSpectrogram {
     opts: FbankOptions,
@@ -109,7 +111,7 @@ mod tests {
     #[test]
     fn test_silence_returns_finite_features() {
         let mel = MelSpectrogram::new();
-        let silence = vec![0.0_f32; 16000];
+        let silence = vec![0.0_f32; TARGET_SAMPLE_RATE as usize];
         let (features, num_frames) = mel.compute(&silence);
         assert!(num_frames > 0, "silence must still produce frames");
         assert_eq!(features.len(), N_MELS * num_frames);
@@ -130,8 +132,10 @@ mod tests {
     #[test]
     fn test_sine_wave_has_dynamic_range() {
         let mel = MelSpectrogram::new();
-        let samples: Vec<f32> = (0..16000)
-            .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 16000.0).sin())
+        let samples: Vec<f32> = (0..TARGET_SAMPLE_RATE as usize)
+            .map(|i| {
+                (2.0 * std::f32::consts::PI * 440.0 * i as f32 / TARGET_SAMPLE_RATE as f32).sin()
+            })
             .collect();
         let (features, num_frames) = mel.compute(&samples);
         assert!(num_frames > 0);
@@ -150,7 +154,7 @@ mod tests {
         // because rounding-to-power-of-two padding may shift the boundary
         // by one frame on some inputs.
         let mel = MelSpectrogram::new();
-        let samples = vec![0.0_f32; 16000];
+        let samples = vec![0.0_f32; TARGET_SAMPLE_RATE as usize];
         let (_, num_frames) = mel.compute(&samples);
         assert!(
             (96..=100).contains(&num_frames),

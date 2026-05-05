@@ -346,7 +346,7 @@ mod tests {
 
     #[test]
     fn test_segment_samples_constant() {
-        // 1.5 s * 16000 Hz = 24000
+        // 1.5 s * TARGET_SAMPLE_RATE Hz = 24000
         assert_eq!(SEGMENT_SAMPLES, 24000);
     }
 

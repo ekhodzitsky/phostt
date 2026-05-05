@@ -50,11 +50,6 @@ anyhow = "1"
 # Cryptographic hashing for model verification
 sha2 = "0.10"
 
-# FFT for mel spectrogram. `kaldi-native-fbank` brings its own
-# `realfft`/`rustfft` planner internally, but rustfft is kept as a direct
-# dependency for legacy callers that use the `Fft` trait.
-rustfft = "6"
-
 # Kaldi-compatible FBANK feature extractor (pure Rust port of
 # kaldi-native-fbank, the same library sherpa-onnx uses for Zipformer
 # preprocessing). Provides povey window + preemphasis + Slaney mel banks
@@ -96,7 +91,6 @@ silero = { version = "0.2.0", features = ["bundled"] }
 tempfile = "3"
 tokio-tungstenite = "0.29"
 criterion = { version = "0.5", features = ["html_reports"] }
-tract-onnx = "0.22.1"
 # `tracing-subscriber` is declared in `[dependencies]`; cargo already exposes
 # it to integration tests, so no separate dev-dep is needed.
 

@@ -270,8 +270,12 @@ pub unsafe extern "C" fn phostt_stream_process_chunk(
     let mut samples_f32: Vec<f32> = pcm16.iter().map(|&s| s as f32 / 32768.0).collect();
 
     // Resample to 16 kHz if needed.
-    if sample_rate != 16000 {
-        samples_f32 = match audio::resample(&samples_f32, sample_rate, 16000) {
+    if sample_rate != crate::inference::TARGET_SAMPLE_RATE {
+        samples_f32 = match audio::resample(
+            &samples_f32,
+            sample_rate,
+            crate::inference::TARGET_SAMPLE_RATE,
+        ) {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!("phostt_stream_process_chunk: resample failed: {e}");
@@ -377,20 +381,39 @@ mod tests {
 
         // null engine
         let r = unsafe {
-            phostt_stream_process_chunk(ptr::null_mut(), ptr::null_mut(), ptr::null(), 0, 16000)
+            phostt_stream_process_chunk(
+                ptr::null_mut(),
+                ptr::null_mut(),
+                ptr::null(),
+                0,
+                crate::inference::TARGET_SAMPLE_RATE,
+            )
         };
         assert!(r.is_null());
 
         // null stream
         let r = unsafe {
-            phostt_stream_process_chunk(engine_ptr, ptr::null_mut(), ptr::null(), 0, 16000)
+            phostt_stream_process_chunk(
+                engine_ptr,
+                ptr::null_mut(),
+                ptr::null(),
+                0,
+                crate::inference::TARGET_SAMPLE_RATE,
+            )
         };
         assert!(r.is_null());
 
         // null pcm16
         let dummy_stream = 0x1 as *mut PhosttStream;
-        let r =
-            unsafe { phostt_stream_process_chunk(engine_ptr, dummy_stream, ptr::null(), 0, 16000) };
+        let r = unsafe {
+            phostt_stream_process_chunk(
+                engine_ptr,
+                dummy_stream,
+                ptr::null(),
+                0,
+                crate::inference::TARGET_SAMPLE_RATE,
+            )
+        };
         assert!(r.is_null());
 
         unsafe { phostt_engine_free(engine_ptr) };

@@ -675,12 +675,7 @@ async fn handle_ws(socket: WebSocket, peer: SocketAddr, state: Arc<http::AppStat
         _ = state.shutdown.cancelled() => {
             tracing::info!(peer = %peer, "Shutdown requested before pool checkout");
             let (mut sink, _) = socket.split();
-            let _ = sink
-                .send(WsMessage::Close(Some(axum::extract::ws::CloseFrame {
-                    code: 1001,
-                    reason: "server shutdown".into(),
-                })))
-                .await;
+            let _ = sink.send(ws_close_message(1001, "server shutdown")).await;
             return;
         }
         res = tokio::time::timeout(
@@ -779,6 +774,43 @@ enum FrameOutcome {
 
 type WsSink = futures_util::stream::SplitSink<WebSocket, WsMessage>;
 
+/// Build a WebSocket Close message with the given code and reason.
+fn ws_close_message(code: u16, reason: &str) -> WsMessage {
+    WsMessage::Close(Some(axum::extract::ws::CloseFrame {
+        code,
+        reason: reason.into(),
+    }))
+}
+
+/// Decode a raw PCM16 binary frame into f32 samples, carrying an odd trailing
+/// byte across frames so misaligned streams don't accumulate phase shift.
+fn decode_pcm16_frame(data: &[u8], pending_byte: &mut Option<u8>, peer: SocketAddr) -> Vec<f32> {
+    let carry_prev = pending_byte.take();
+    let samples_f32: Vec<f32> = if carry_prev.is_some() || !data.len().is_multiple_of(2) {
+        let mut combined = Vec::with_capacity(data.len() + 1);
+        if let Some(prev) = carry_prev {
+            combined.push(prev);
+        }
+        combined.extend_from_slice(data);
+        if !combined.len().is_multiple_of(2) {
+            tracing::warn!(
+                "Odd-length PCM stream from {peer}: {} bytes incl. carry, deferring 1 byte",
+                combined.len()
+            );
+            *pending_byte = combined.pop();
+        }
+        combined
+            .chunks_exact(2)
+            .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / 32768.0)
+            .collect()
+    } else {
+        data.chunks_exact(2)
+            .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / 32768.0)
+            .collect()
+    };
+    samples_f32
+}
+
 /// Send a serialized ServerMessage over the WebSocket sink. `?`-friendly so
 /// handlers can delegate error propagation without duplicating the sink dance.
 async fn send_server_message(sink: &mut WsSink, msg: &ServerMessage) -> Result<()> {
@@ -809,40 +841,15 @@ async fn handle_binary_frame(
     }
     *audio_received = true;
 
-    // V1-25: PCM16 samples are 2 bytes each. Previously we called
-    // `chunks_exact(2)` directly and silently dropped a trailing odd byte,
-    // which introduced a 1-sample phase shift for every subsequent frame —
-    // subtle on the decode side, hard to diagnose. Carry the odd byte
-    // across frames: prepend the one left over from the previous frame
-    // (if any), then save the new remainder for next time. Observation-only
-    // `warn!` remains so server-side logs still flag misaligned streams.
-    let carry_prev = pending_byte.take();
-    let samples_f32: Vec<f32> = if carry_prev.is_some() || !data.len().is_multiple_of(2) {
-        let mut combined = Vec::with_capacity(data.len() + 1);
-        if let Some(prev) = carry_prev {
-            combined.push(prev);
-        }
-        combined.extend_from_slice(&data);
-        if !combined.len().is_multiple_of(2) {
-            tracing::warn!(
-                "Odd-length PCM stream from {peer}: {} bytes incl. carry, deferring 1 byte",
-                combined.len()
-            );
-            *pending_byte = combined.pop();
-        }
-        combined
-            .chunks_exact(2)
-            .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / 32768.0)
-            .collect()
-    } else {
-        data.chunks_exact(2)
-            .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / 32768.0)
-            .collect()
-    };
-    let samples_16k = if client_sample_rate == 16000 {
+    let samples_f32 = decode_pcm16_frame(&data, pending_byte, peer);
+    let samples_16k = if client_sample_rate == crate::inference::TARGET_SAMPLE_RATE {
         samples_f32
     } else {
-        crate::inference::audio::resample(&samples_f32, client_sample_rate, 16000)?
+        crate::inference::audio::resample(
+            &samples_f32,
+            client_sample_rate,
+            crate::inference::TARGET_SAMPLE_RATE,
+        )?
     };
 
     let state = state_opt
@@ -1178,12 +1185,7 @@ async fn handle_ws_inner(
         if cancel.is_cancelled() {
             tracing::info!(peer = %peer, "Shutdown signalled — flushing WS session");
             let _ = flush_and_final(&mut sink, engine, &mut state_opt, &mut triplet_opt).await;
-            let _ = sink
-                .send(WsMessage::Close(Some(axum::extract::ws::CloseFrame {
-                    code: 1001,
-                    reason: "server shutdown".into(),
-                })))
-                .await;
+            let _ = sink.send(ws_close_message(1001, "server shutdown")).await;
             break Ok(());
         }
         if tokio::time::Instant::now() >= session_deadline {
@@ -1203,10 +1205,7 @@ async fn handle_ws_inner(
             .await;
             let _ = flush_and_final(&mut sink, engine, &mut state_opt, &mut triplet_opt).await;
             let _ = sink
-                .send(WsMessage::Close(Some(axum::extract::ws::CloseFrame {
-                    code: 1008,
-                    reason: "max session duration".into(),
-                })))
+                .send(ws_close_message(1008, "max session duration"))
                 .await;
             break Ok(());
         }
@@ -1222,12 +1221,7 @@ async fn handle_ws_inner(
                 // Best-effort: the socket may already be dead if the peer
                 // closed first, so every send is swallowed.
                 let _ = flush_and_final(&mut sink, engine, &mut state_opt, &mut triplet_opt).await;
-                let _ = sink
-                    .send(WsMessage::Close(Some(axum::extract::ws::CloseFrame {
-                        code: 1001,
-                        reason: "server shutdown".into(),
-                    })))
-                    .await;
+                let _ = sink.send(ws_close_message(1001, "server shutdown")).await;
                 break Ok(());
             }
 
@@ -1247,12 +1241,7 @@ async fn handle_ws_inner(
                 )
                 .await;
                 let _ = flush_and_final(&mut sink, engine, &mut state_opt, &mut triplet_opt).await;
-                let _ = sink
-                    .send(WsMessage::Close(Some(axum::extract::ws::CloseFrame {
-                        code: 1008,
-                        reason: "max session duration".into(),
-                    })))
-                    .await;
+                let _ = sink.send(ws_close_message(1008, "max session duration")).await;
                 break Ok(());
             }
 
@@ -1388,8 +1377,9 @@ mod tests {
             "SUPPORTED_RATES must include 8000 Hz"
         );
         assert!(
-            SUPPORTED_RATES.contains(&16000),
-            "SUPPORTED_RATES must include 16000 Hz"
+            SUPPORTED_RATES.contains(&crate::inference::TARGET_SAMPLE_RATE),
+            "SUPPORTED_RATES must include {} Hz",
+            crate::inference::TARGET_SAMPLE_RATE
         );
         assert!(
             SUPPORTED_RATES.contains(&48000),
@@ -1767,5 +1757,191 @@ mod tests {
         }
 
         let _ = shutdown_tx.send(());
+    }
+
+    // -----------------------------------------------------------------------
+    // WebSocket handler error paths (model-free)
+    // -----------------------------------------------------------------------
+
+    /// Spin up a minimal axum WS endpoint, complete the handshake, and hand
+    /// back the server-side `SplitSink` so `handle_binary_frame` can be called
+    /// directly in unit tests.  The client connection is dropped before
+    /// returning, but the sink is never used in the error-path tests below.
+    async fn test_ws_sink() -> WsSink {
+        let (ws_tx, mut ws_rx) = tokio::sync::mpsc::unbounded_channel::<WebSocket>();
+        let app = Router::new().route(
+            "/_test_ws",
+            get(move |ws: WebSocketUpgrade| async move {
+                ws.on_upgrade(move |socket| async move {
+                    let _ = ws_tx.send(socket);
+                })
+            }),
+        );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let _client = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/_test_ws"))
+            .await
+            .unwrap()
+            .0;
+
+        let server_ws = tokio::time::timeout(std::time::Duration::from_secs(5), ws_rx.recv())
+            .await
+            .expect("server ws should be sent")
+            .expect("server ws channel should not close");
+
+        let (sink, _stream) = server_ws.split();
+        sink
+    }
+
+    #[tokio::test]
+    async fn test_handle_binary_frame_state_none_errors() {
+        let mut sink = test_ws_sink().await;
+        let engine = Arc::new(Engine::test_stub());
+        let mut state_opt = None;
+        let mut triplet_opt = None;
+        let mut audio_received = false;
+        let mut pending_byte = None;
+        let peer = SocketAddr::from(([127, 0, 0, 1], 12345));
+        let data = axum::body::Bytes::from(vec![0x00, 0x00, 0x00, 0x00]);
+
+        let result = handle_binary_frame(
+            &mut sink,
+            &engine,
+            &mut state_opt,
+            &mut triplet_opt,
+            &mut audio_received,
+            16000,
+            &mut pending_byte,
+            peer,
+            data,
+        )
+        .await;
+
+        match result {
+            Ok(_) => panic!("handle_binary_frame must error when state_opt is None"),
+            Err(e) => {
+                let msg = format!("{e:#}");
+                assert!(
+                    msg.contains("Streaming state lost"),
+                    "error message should mention lost state: {msg}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_binary_frame_triplet_none_errors() {
+        let mut sink = test_ws_sink().await;
+        let engine = Arc::new(Engine::test_stub());
+        let mut state_opt = Some(engine.create_state(false).unwrap());
+        let mut triplet_opt = None;
+        let mut audio_received = false;
+        let mut pending_byte = None;
+        let peer = SocketAddr::from(([127, 0, 0, 1], 12345));
+        let data = axum::body::Bytes::from(vec![0x00, 0x00, 0x00, 0x00]);
+
+        let result = handle_binary_frame(
+            &mut sink,
+            &engine,
+            &mut state_opt,
+            &mut triplet_opt,
+            &mut audio_received,
+            16000,
+            &mut pending_byte,
+            peer,
+            data,
+        )
+        .await;
+
+        match result {
+            Ok(_) => panic!("handle_binary_frame must error when triplet_opt is None"),
+            Err(e) => {
+                let msg = format!("{e:#}");
+                assert!(
+                    msg.contains("Triplet lost"),
+                    "error message should mention lost triplet: {msg}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_malformed_json_text_frame_returns_continue() {
+        let text = "not valid json {{{";
+        let result = serde_json::from_str::<ClientMessage>(text);
+        assert!(result.is_err(), "malformed JSON must fail to parse");
+        // In handle_ws_inner the Err branch logs a debug message and returns
+        // FrameOutcome::Continue — the test below locks in that the parser does
+        // not panic and the branch is reachable.
+    }
+
+    // -----------------------------------------------------------------------
+    // Metrics middleware
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_http_metrics_middleware_records_requests() {
+        let registry = Arc::new(metrics::MetricsRegistry::new());
+        registry.register_counter(
+            "phostt_http_requests_total",
+            "Total HTTP requests processed",
+        );
+        registry.register_histogram(
+            "phostt_http_request_duration_seconds",
+            "HTTP request duration in seconds",
+            metrics::DEFAULT_BUCKETS,
+        );
+
+        let engine = crate::inference::Engine::test_stub();
+        let state = Arc::new(http::AppState {
+            engine: Arc::new(engine),
+            limits: RuntimeLimits::default(),
+            metrics_registry: Some(registry.clone()),
+            shutdown: tokio_util::sync::CancellationToken::new(),
+            tracker: tokio_util::task::TaskTracker::new(),
+        });
+
+        let app = Router::new()
+            .route("/health", get(|| async { "ok" }))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                http_metrics_middleware,
+            ))
+            .with_state(state);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let client = reqwest::Client::new();
+        let r = client
+            .get(format!("http://127.0.0.1:{port}/health"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 200);
+
+        let text = registry.render_prometheus();
+        assert!(
+            text.contains(
+                "phostt_http_requests_total{method=\"GET\",path=\"/health\",status=\"200\"} 1"
+            ),
+            "counter should record the request: {text}"
+        );
+        assert!(
+            text.contains(
+                "phostt_http_request_duration_seconds_count{method=\"GET\",path=\"/health\"} 1"
+            ),
+            "histogram should record the request: {text}"
+        );
     }
 }

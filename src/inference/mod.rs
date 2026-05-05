@@ -10,8 +10,8 @@ mod tokenizer;
 #[cfg(feature = "diarization")]
 pub mod diarization;
 
-#[cfg(all(feature = "coreml", feature = "cuda"))]
-compile_error!("Features `coreml` and `cuda` are mutually exclusive. Choose one.");
+// When both `coreml` and `cuda` are enabled, CUDA takes precedence.
+// This allows `cargo check --all-features` to pass for CI hygiene.
 
 use anyhow::Context;
 #[cfg(any(feature = "coreml", feature = "cuda"))]
@@ -30,6 +30,9 @@ use kaldi_native_fbank::fbank::FbankComputer;
 use kaldi_native_fbank::online::{FeatureComputer, OnlineFeature};
 use tokenizer::Tokenizer;
 
+/// Target audio sample rate in Hz. All audio fed to the model must be
+/// resampled to this rate.
+pub const TARGET_SAMPLE_RATE: u32 = 16000;
 /// Number of mel frequency bins used for spectrogram features.
 /// Zipformer-vi expects 80-bin FBANK (kaldi-native-fbank default for ASR).
 pub const N_MELS: usize = 80;
@@ -60,8 +63,8 @@ pub(crate) fn now_timestamp() -> f64 {
         .as_secs_f64()
 }
 
-/// Seconds per encoder frame (HOP_LENGTH * 4 / 16000 = 0.04s).
-const SECONDS_PER_FRAME: f64 = (HOP_LENGTH as f64) * 4.0 / 16000.0;
+/// Seconds per encoder frame (HOP_LENGTH * 4 / TARGET_SAMPLE_RATE = 0.04s).
+const SECONDS_PER_FRAME: f64 = (HOP_LENGTH as f64) * 4.0 / (TARGET_SAMPLE_RATE as f64);
 
 /// Default number of session triplets in the pool.
 const DEFAULT_POOL_SIZE: usize = 4;
@@ -625,7 +628,7 @@ impl Engine {
         // Zipformer-vi ships pre-quantized — there is no FP32 fallback to choose.
         let encoder_path = dir.join("encoder.int8.onnx");
 
-        #[cfg(feature = "coreml")]
+        #[cfg(all(feature = "coreml", not(feature = "cuda")))]
         let (encoder, decoder, joiner) = {
             // CoreML has its own cache (`coreml_cache/`) for compiled subgraphs.
             // We do NOT call `.with_optimized_model_path(...)` here: CoreML EP
@@ -925,7 +928,9 @@ impl Engine {
             None
         };
 
-        state.online.accept_waveform(16000.0, samples);
+        state
+            .online
+            .accept_waveform(TARGET_SAMPLE_RATE as f32, samples);
 
         let ready = state.online.num_frames_ready();
         let new_frames = ready.saturating_sub(state.frames_seen);
@@ -1300,7 +1305,7 @@ impl Engine {
         float_samples: &[f32],
         triplet: &mut SessionTriplet,
     ) -> Result<TranscribeResult, GigasttError> {
-        let duration_s = float_samples.len() as f64 / 16000.0;
+        let duration_s = float_samples.len() as f64 / (TARGET_SAMPLE_RATE as f64);
 
         let (features, num_frames) = self.mel.compute(float_samples);
         tracing::info!("Extracted {} mel frames", num_frames);
@@ -2204,5 +2209,71 @@ mod tests {
             normalize(&offline_text),
             "streaming transcript should match offline transcript"
         );
+    }
+
+    #[test]
+    fn test_vad_pipeline_with_synthetic_audio() {
+        // Model-free: manually drive the Silero VAD segmenter with synthetic
+        // probability values to verify the segment-to-buffer queueing logic
+        // that process_chunk_vad performs.
+        let mut segmenter = silero::SpeechSegmenter::new(silero::SpeechOptions::default());
+
+        // Simulate ~3 seconds of speech (Silero VAD processes 512-sample
+        // windows at 16 kHz → ~32 ms per window → ~94 windows in 3 s).
+        for _ in 0..100 {
+            if segmenter.push_probability(0.95).is_some() {
+                // segment completed mid-speech — unlikely with steady high prob
+            }
+        }
+
+        // Simulate ~1 second of silence to force the segment to close.
+        let mut segments: Vec<silero::SpeechSegment> = Vec::new();
+        for _ in 0..35 {
+            if let Some(seg) = segmenter.push_probability(0.02) {
+                segments.push(seg);
+            }
+        }
+
+        // Finish must emit any trailing open segment.
+        if let Some(seg) = segmenter.finish() {
+            segments.push(seg);
+        }
+
+        assert!(
+            !segments.is_empty(),
+            "VAD segmenter should emit at least one segment after speech+silence"
+        );
+
+        // Build a synthetic audio buffer whose length covers the segment.
+        let sample_rate = 16000usize;
+        let duration_sec = 5usize;
+        let total_samples = sample_rate * duration_sec;
+        let mut samples = Vec::with_capacity(total_samples);
+        for i in 0..total_samples {
+            let t = i as f32 / sample_rate as f32;
+            samples.push((2.0 * std::f32::consts::PI * 440.0 * t).sin() * 0.5);
+        }
+
+        // Simulate the queueing logic that process_chunk_vad performs.
+        let vad_audio_buffer = samples.clone();
+        let vad_sample_offset: u64 = 0;
+        let mut vad_pending_asr: Vec<Vec<f32>> = Vec::new();
+
+        for segment in &segments {
+            let buf_start = segment.start_sample().saturating_sub(vad_sample_offset) as usize;
+            let buf_end = segment.end_sample().saturating_sub(vad_sample_offset) as usize;
+            if buf_end <= vad_audio_buffer.len() && buf_start < buf_end {
+                let speech_samples = &vad_audio_buffer[buf_start..buf_end];
+                vad_pending_asr.push(speech_samples.to_vec());
+            }
+        }
+
+        assert!(
+            !vad_pending_asr.is_empty(),
+            "vad_pending_asr should be populated with queued utterances"
+        );
+        for utterance in &vad_pending_asr {
+            assert!(!utterance.is_empty(), "queued utterance must not be empty");
+        }
     }
 }
