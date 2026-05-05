@@ -2,7 +2,7 @@ name: Benchmark
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   schedule:
     # Run every Sunday at 03:00 UTC
     - cron: '0 3 * * 0'
@@ -61,17 +61,17 @@ jobs:
           COREML_LATENCY=$(grep "Mean latency" /tmp/coreml_benchmark.txt | awk '{print $3}')
           COREML_RTF=$(grep "RTF" /tmp/coreml_benchmark.txt | awk '{print $4}')
 
-          cat >> BENCHMARKS.md << EOF
-
-## ${DATE} (commit ${COMMIT})
-
-### macOS-14 (Apple Silicon)
-
-| Backend | Mean Latency | RTF |
-|---|---|---|
-| CPU | ${CPU_LATENCY} ms | ${CPU_RTF} |
-| CoreML | ${COREML_LATENCY} ms | ${COREML_RTF} |
-EOF
+          {
+            echo ""
+            echo "## ${DATE} (commit ${COMMIT})"
+            echo ""
+            echo "### macOS-14 (Apple Silicon)"
+            echo ""
+            echo "| Backend | Mean Latency | RTF |"
+            echo "|---|---|---|"
+            echo "| CPU | ${CPU_LATENCY} ms | ${CPU_RTF} |"
+            echo "| CoreML | ${COREML_LATENCY} ms | ${COREML_RTF} |"
+          } >> BENCHMARKS.md
 
       - name: Commit benchmark results
         uses: stefanzweifel/git-auto-commit-action@v5
