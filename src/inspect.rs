@@ -51,6 +51,10 @@ fn print_outlets(kind: &str, outlets: &[ort::value::Outlet]) {
     }
     println!("  {kind}:");
     for outlet in outlets {
-        println!("    - name={:<40} dtype={:?}", outlet.name(), outlet.dtype());
+        println!(
+            "    - name={:<40} dtype={:?}",
+            outlet.name(),
+            outlet.dtype()
+        );
     }
 }

@@ -413,8 +413,8 @@ pub async fn transcribe_stream(
     });
 
     // Convert receiver to SSE stream
-    let stream = tokio_stream::wrappers::ReceiverStream::new(rx)
-        .map(|result| Ok(segment_to_event(result)));
+    let stream =
+        tokio_stream::wrappers::ReceiverStream::new(rx).map(|result| Ok(segment_to_event(result)));
 
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
@@ -426,7 +426,9 @@ fn segment_to_event(result: Result<crate::inference::TranscriptSegment, String>)
 }
 
 /// Pure JSON mapping — the testable half of [`segment_to_event`].
-fn segment_to_json_value(result: Result<crate::inference::TranscriptSegment, String>) -> serde_json::Value {
+fn segment_to_json_value(
+    result: Result<crate::inference::TranscriptSegment, String>,
+) -> serde_json::Value {
     match result {
         Ok(seg) => {
             if seg.is_final {
@@ -532,9 +534,8 @@ mod tests {
     async fn test_transcribe_pool_timeout() {
         tokio::time::pause();
         let state = test_state(RuntimeLimits::default(), None);
-        let handle = tokio::spawn(async move {
-            transcribe(State(state), Bytes::from(vec![1u8])).await
-        });
+        let handle =
+            tokio::spawn(async move { transcribe(State(state), Bytes::from(vec![1u8])).await });
         tokio::time::advance(std::time::Duration::from_secs(31)).await;
         let result = handle.await.unwrap();
         assert!(result.is_err());
@@ -554,9 +555,10 @@ mod tests {
     async fn test_stream_pool_timeout() {
         tokio::time::pause();
         let state = test_state(RuntimeLimits::default(), None);
-        let handle = tokio::spawn(async move {
-            transcribe_stream(State(state), Bytes::from(vec![1u8])).await
-        });
+        let handle =
+            tokio::spawn(
+                async move { transcribe_stream(State(state), Bytes::from(vec![1u8])).await },
+            );
         tokio::time::advance(std::time::Duration::from_secs(31)).await;
         let result = handle.await.unwrap();
         assert!(result.is_err());

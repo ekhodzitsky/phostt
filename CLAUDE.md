@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Repository**: https://github.com/ekhodzitsky/phostt
 - **License**: MIT
 - **Crates.io**: `phostt` name verified available (not yet published)
-- **Status**: 0.1.0 release candidate. Forked from [`gigastt`](https://github.com/ekhodzitsky/gigastt) v0.9.4 (Russian STT). The HTTP/WS/SSE/metrics/shutdown stack is production-grade and unchanged. The inference path (model fetch, 80-bin mel features, SentencePiece BPE tokenizer, stateless RNN-T decode, overlap-buffer streaming) is fully wired and tested against Vietnamese audio fixtures.
+- **Status**: 0.3.0. Forked from [`gigastt`](https://github.com/ekhodzitsky/gigastt) v0.9.4 (Russian STT). The HTTP/WS/SSE/metrics/shutdown stack is production-grade and unchanged. The inference path (model fetch, 80-bin mel features, SentencePiece BPE tokenizer, stateless RNN-T decode, overlap-buffer streaming) is fully wired and tested against Vietnamese audio fixtures.
 
 ## Build & Test
 
@@ -26,19 +26,20 @@ cargo clippy                         # Lint (no expected warnings)
 
 ## Model
 
-**Zipformer-30M-RNNT-6000h** packaged by `sherpa-onnx` (Apache 2.0):
+**Zipformer-vi-int8-2025-04-20** packaged by `sherpa-onnx` (Apache 2.0):
 
-- Source bundle: `sherpa-onnx-zipformer-vi-30M-int8-2026-02-09.tar.bz2`
-  (~26 MB) from [k2-fsa/sherpa-onnx releases](https://github.com/k2-fsa/sherpa-onnx/releases)
-- Files inside: `encoder.int8.onnx` (26 MB), `decoder.onnx` (4.9 MB),
-  `joiner.int8.onnx` (1.0 MB), `bpe.model` (262 KB), `tokens.txt`
+- Source bundle: `sherpa-onnx-zipformer-vi-int8-2025-04-20.tar.bz2`
+  (~77 MB INT8) from [k2-fsa/sherpa-onnx releases](https://github.com/k2-fsa/sherpa-onnx/releases)
+- Files inside: `encoder.int8.onnx` (70.9 MB), `decoder.onnx` (5.2 MB),
+  `joiner.int8.onnx` (1.0 MB), `bpe.model` (271 KB), `tokens.txt`
 - Sample rate: 16 kHz · Mel bins: 80 · Vocab: SentencePiece BPE
 - Decode: RNN-T greedy (stateless decoder — no LSTM h/c)
-- Training: ~6000 hours of Vietnamese speech (`hynt/Zipformer-30M-RNNT-6000h`)
-- WER: ~12.3 on VLSP2020-T1, ~7.97 on VLSP2025-Pub, ~7.56 on GigaSpeech2
+- Training: ~70,000 hours of Vietnamese speech (`zzasdf/viet_iter3_pseudo_label`)
+- WER: ~8–10% on VLSP2020-T1 (estimated, vs ~12% for the older 6k-hour model)
 
 The bundle is downloaded on first run into `~/.phostt/models/`. SHA-256
-verification + atomic rename, same hardening as the upstream gigastt fetcher.
+verification + atomic rename + automatic filename normalization
+(`encoder-epoch-12-avg-8.int8.onnx` → `encoder.int8.onnx`).
 
 ## Architecture
 
@@ -74,15 +75,39 @@ src/
 
 Zipformer-vi-30M is an offline transducer. phostt wraps it in a sliding
 overlap-buffer (`StreamingState`) to expose real-time WebSocket streaming.
-The implementation uses a 4-second window with 1-second overlap: audio is
-chunked, each chunk is featurized and encoded independently, and partial
-results are merged across boundaries.
+Audio is chunked into configurable windows (default 4 s), each chunk is
+featurized and encoded independently, and partial results are merged across
+boundaries with optional fuzzy word matching to handle boundary instability.
 
 `kaldi_native_fbank::OnlineFeature` in `inference/features.rs` drives the
 feature extraction, providing the same povey-window + preemphasis + Slaney
 mel filterbank pipeline that sherpa-onnx uses upstream. The `OnlineFeature`
 wrapper handles streaming increments, while the overlap-and-merge logic in
 `StreamingState` works around the offline encoder constraint.
+
+### Streaming modes
+
+Two mutually exclusive streaming strategies are available:
+
+1. **Overlap-buffer (default)** — fixed 4-second windows with 1-second overlap.
+   Emits `Partial` (interim) results as speech progresses and `Final` on
+   endpointing (~600 ms silence or decoder blank streak).
+   - `--streaming-window-ms` / `--streaming-overlap-ms` tune latency vs accuracy.
+   - `--streaming-fuzzy-threshold` enables fuzzy boundary merge.
+
+2. **VAD-based simulated streaming (`--vad`)** — Silero VAD segments speech
+   into natural utterances; each utterance is transcribed offline with the
+   full encoder context. Eliminates boundary artefacts entirely. While speech
+   is active, partial (interim) results are still emitted via the overlap-buffer
+   so clients see live transcription progress. Suitable for high-accuracy
+   use cases where latency tolerance is higher.
+
+### Tunable overlap-buffer parameters
+- `--streaming-window-ms` (default 4000) — mel frames per encoder window.
+- `--streaming-overlap-ms` (default 1000) — overlap between consecutive windows.
+- `--streaming-fuzzy-threshold` (default 1.0) — normalized Levenshtein similarity
+  for boundary word deduplication. Lower values reduce duplicate words on
+  boundaries at the cost of potentially missing legitimate repetitions.
 
 ### Graceful shutdown
 - `CancellationToken` + `TaskTracker` cascades through every WS / SSE handler.

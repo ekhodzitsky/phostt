@@ -1,5 +1,5 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
-use phostt::inference::{audio, Engine};
+use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use phostt::inference::{Engine, audio};
 use std::time::Duration;
 
 fn latency_benchmark(c: &mut Criterion) {
@@ -37,7 +37,11 @@ fn latency_benchmark(c: &mut Criterion) {
     group.throughput(Throughput::Elements(audio_duration_ms));
 
     group.bench_function("transcribe_0", |b| {
-        b.iter(|| engine.transcribe_samples(black_box(&samples), &mut triplet).unwrap());
+        b.iter(|| {
+            engine
+                .transcribe_samples(black_box(&samples), &mut triplet)
+                .unwrap()
+        });
     });
 
     group.finish();

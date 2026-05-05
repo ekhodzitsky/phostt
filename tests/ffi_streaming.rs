@@ -3,11 +3,13 @@
 //! Requires the ONNX model bundle (~850 MB).
 //! Run with: `cargo test --test ffi_streaming -- --ignored --features ffi`
 
+#![cfg(feature = "ffi")]
+
 mod common;
 
 use phostt::ffi::{
-    phostt_engine_free, phostt_stream_flush, phostt_stream_free, phostt_stream_new,
-    phostt_stream_process_chunk, phostt_string_free, PhosttEngine,
+    PhosttEngine, phostt_engine_free, phostt_stream_flush, phostt_stream_free, phostt_stream_new,
+    phostt_stream_process_chunk, phostt_string_free,
 };
 use std::ffi::CString;
 
@@ -37,21 +39,21 @@ fn test_ffi_streaming_happy_path() {
     // 2. Feed a 1-second 440 Hz tone at 16 kHz.
     let pcm16 = common::generate_pcm16_tone(1.0, 16000, 440.0);
     let cstring = unsafe {
-        phostt_stream_process_chunk(
-            engine_ptr,
-            stream_ptr,
-            pcm16.as_ptr(),
-            pcm16.len(),
-            16000,
-        )
+        phostt_stream_process_chunk(engine_ptr, stream_ptr, pcm16.as_ptr(), pcm16.len(), 16000)
     };
-    assert!(!cstring.is_null(), "process_chunk should return a JSON string");
+    assert!(
+        !cstring.is_null(),
+        "process_chunk should return a JSON string"
+    );
 
     let json_str = unsafe { CString::from_raw(cstring) }
         .to_string_lossy()
         .to_string();
     let json: serde_json::Value = serde_json::from_str(&json_str).expect("JSON should parse");
-    assert!(json.is_array(), "process_chunk output should be a JSON array");
+    assert!(
+        json.is_array(),
+        "process_chunk output should be a JSON array"
+    );
 
     // 3. Flush — should return a (possibly empty) array.
     let cstring = unsafe { phostt_stream_flush(engine_ptr, stream_ptr) };
@@ -88,15 +90,12 @@ fn test_ffi_streaming_resample_48k() {
 
     let pcm16 = common::generate_pcm16_tone(0.5, 48000, 440.0);
     let cstring = unsafe {
-        phostt_stream_process_chunk(
-            engine_ptr,
-            stream_ptr,
-            pcm16.as_ptr(),
-            pcm16.len(),
-            48000,
-        )
+        phostt_stream_process_chunk(engine_ptr, stream_ptr, pcm16.as_ptr(), pcm16.len(), 48000)
     };
-    assert!(!cstring.is_null(), "process_chunk with 48 kHz should succeed");
+    assert!(
+        !cstring.is_null(),
+        "process_chunk with 48 kHz should succeed"
+    );
     unsafe { phostt_string_free(cstring) };
 
     let cstring = unsafe { phostt_stream_flush(engine_ptr, stream_ptr) };

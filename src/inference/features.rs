@@ -100,7 +100,10 @@ mod tests {
     #[test]
     fn test_default_dim_matches_const() {
         let mel = MelSpectrogram::new();
-        assert_eq!(mel.n_mels, N_MELS, "n_mels must agree with the public constant");
+        assert_eq!(
+            mel.n_mels, N_MELS,
+            "n_mels must agree with the public constant"
+        );
     }
 
     #[test]

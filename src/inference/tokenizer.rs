@@ -118,7 +118,11 @@ mod tests {
         let f = write_vocab(SHERPA_PREFIX);
         let tok = Tokenizer::load(f.path()).unwrap();
         assert_eq!(tok.vocab_size(), 5);
-        assert_eq!(tok.blank_id(), 0, "sherpa-onnx Zipformer-vi puts <blk> at id=0");
+        assert_eq!(
+            tok.blank_id(),
+            0,
+            "sherpa-onnx Zipformer-vi puts <blk> at id=0"
+        );
     }
 
     #[test]

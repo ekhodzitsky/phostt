@@ -7,7 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-05
+
 ### Added
+
+- **Silero VAD simulated streaming** (`--vad`). When enabled, speech is
+  segmented by voice activity instead of the fixed overlap-buffer. Each
+  detected utterance is transcribed offline, eliminating boundary artefacts
+  entirely. While speech is active, partial (interim) results are still
+  emitted via the overlap-buffer so clients see live transcription progress.
+  Uses the bundled `silero_vad.onnx` (~1 MB) via the `silero` crate.
+- Configurable streaming overlap-buffer parameters:
+  - `--streaming-window-ms` (default 4000) and `--streaming-overlap-ms` (default 1000)
+    control the latency / accuracy trade-off of the overlap-buffer streaming.
+  - `--streaming-fuzzy-threshold` (default 1.0) enables fuzzy word matching on
+    window boundaries using normalized Levenshtein distance. Reduces duplicate
+    words when the offline encoder produces slightly different transcripts in
+    the overlap zone.
+- `StreamingConfig` struct with validation (window / overlap must be multiples
+  of 4 due to encoder subsampling, overlap must be smaller than window).
+- In-tree Levenshtein distance implementation (`levenshtein`, `word_similarity`,
+  `words_match`) with unit tests.
+
+### Changed
+
+- Upgraded default model to `sherpa-onnx-zipformer-vi-int8-2025-04-20` (~77 MB),
+  trained on **70,000 hours** of Vietnamese speech (vs previous ~6,000h).
+  Expected WER improvement: ~20–30% relative on VLSP/GigaSpeech2 benchmarks.
+  The download/extract pipeline now normalizes epoch-specific filenames
+  (e.g. `encoder-epoch-12-avg-8.int8.onnx` → `encoder.int8.onnx`) automatically.
 
 ## [0.2.7] - 2026-04-21
 

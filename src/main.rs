@@ -97,6 +97,29 @@ enum Commands {
         /// your orchestrator's `terminationGracePeriodSeconds`.
         #[arg(long, env = "PHOSTT_SHUTDOWN_DRAIN_SECS", default_value_t = 10)]
         shutdown_drain_secs: u64,
+
+        /// Streaming window size in milliseconds (default 4000 = 4 s).
+        /// Must be a multiple of 40 ms because the encoder subsamples by 4.
+        #[arg(long, env = "PHOSTT_STREAMING_WINDOW_MS", default_value_t = 4000)]
+        streaming_window_ms: u32,
+
+        /// Streaming overlap in milliseconds (default 1000 = 1 s).
+        /// Must be smaller than window and a multiple of 40 ms.
+        #[arg(long, env = "PHOSTT_STREAMING_OVERLAP_MS", default_value_t = 1000)]
+        streaming_overlap_ms: u32,
+
+        /// Fuzzy match threshold for overlap word deduplication [0.0–1.0].
+        /// 1.0 = exact match (default). Lower values allow small spelling
+        /// variations on window boundaries to be treated as the same word.
+        #[arg(long, env = "PHOSTT_STREAMING_FUZZY_THRESHOLD", default_value_t = 1.0)]
+        streaming_fuzzy_threshold: f32,
+
+        /// Enable Silero VAD for simulated streaming. Speech is segmented by
+        /// voice activity instead of the fixed overlap-buffer; each detected
+        /// utterance is transcribed offline. Eliminates boundary artefacts at
+        /// the cost of no partial (interim) results.
+        #[arg(long, default_value_t = false)]
+        vad: bool,
     },
 
     /// Download model bundle without starting the server
@@ -218,10 +241,30 @@ async fn main() -> anyhow::Result<()> {
             metrics,
             max_session_secs,
             shutdown_drain_secs,
+            streaming_window_ms,
+            streaming_overlap_ms,
+            streaming_fuzzy_threshold,
+            vad,
         } => {
             ensure_bind_allowed(&host, bind_all)?;
             model::ensure_model(&model_dir).await?;
-            let engine = inference::Engine::load_with_pool_size(&model_dir, pool_size)?;
+            // 1 mel frame = 10 ms (hop_length 160 @ 16 kHz).
+            let window_frames = (streaming_window_ms / 10) as usize;
+            let overlap_frames = (streaming_overlap_ms / 10) as usize;
+            let streaming_config = inference::StreamingConfig {
+                window_frames,
+                overlap_frames,
+                fuzzy_match_threshold: streaming_fuzzy_threshold,
+            };
+            if let Err(e) = streaming_config.validate() {
+                anyhow::bail!("Invalid streaming config: {e}");
+            }
+            let engine = inference::Engine::load_with_pool_size_and_config_and_vad(
+                &model_dir,
+                pool_size,
+                streaming_config,
+                vad,
+            )?;
             log_rss();
             let config = ServerConfig {
                 port,

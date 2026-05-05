@@ -63,17 +63,68 @@ pub(crate) fn now_timestamp() -> f64 {
 /// Seconds per encoder frame (HOP_LENGTH * 4 / 16000 = 0.04s).
 const SECONDS_PER_FRAME: f64 = (HOP_LENGTH as f64) * 4.0 / 16000.0;
 
-/// Streaming window size in mel frames (4 seconds).
-const STREAMING_WINDOW_FRAMES: usize = 400;
-/// Overlap between consecutive streaming windows in mel frames (1 second).
-const STREAMING_OVERLAP_FRAMES: usize = 100;
-/// Shift between window starts in mel frames.
-const STREAMING_SHIFT_FRAMES: usize = STREAMING_WINDOW_FRAMES - STREAMING_OVERLAP_FRAMES;
-/// Shift between window starts in encoder frames (subsampling-by-4).
-const STREAMING_SHIFT_ENCODER_FRAMES: usize = STREAMING_SHIFT_FRAMES / 4;
-
 /// Default number of session triplets in the pool.
 const DEFAULT_POOL_SIZE: usize = 4;
+
+/// Tunable streaming overlap-buffer parameters.
+///
+/// The offline Zipformer-vi encoder is fed fixed-size windows; these knobs
+/// control the latency / accuracy trade-off. Smaller windows reduce latency
+/// but increase boundary artefacts; larger overlap improves continuity at the
+/// cost of more compute.
+#[derive(Debug, Clone)]
+pub struct StreamingConfig {
+    /// Window size in mel frames (default 400 ≈ 4 s).
+    pub window_frames: usize,
+    /// Overlap between consecutive windows in mel frames (default 100 ≈ 1 s).
+    pub overlap_frames: usize,
+    /// Fuzzy-match threshold for the overlap merge (0.0 = exact, 1.0 = anything).
+    /// Words with normalized Levenshtein similarity ≥ this value are treated
+    /// as equal during boundary deduplication.
+    pub fuzzy_match_threshold: f32,
+}
+
+impl Default for StreamingConfig {
+    fn default() -> Self {
+        Self {
+            window_frames: 400,
+            overlap_frames: 100,
+            fuzzy_match_threshold: 1.0, // exact match by default
+        }
+    }
+}
+
+impl StreamingConfig {
+    /// Shift between window starts in mel frames.
+    pub fn shift_frames(&self) -> usize {
+        self.window_frames.saturating_sub(self.overlap_frames)
+    }
+
+    /// Shift between window starts in encoder frames (subsampling-by-4).
+    pub fn shift_encoder_frames(&self) -> usize {
+        self.shift_frames() / 4
+    }
+
+    /// Validate invariants. Returns an error message if config is invalid.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.window_frames == 0 {
+            return Err("streaming window must be > 0 frames".into());
+        }
+        if self.overlap_frames >= self.window_frames {
+            return Err("streaming overlap must be smaller than window".into());
+        }
+        if !self.window_frames.is_multiple_of(4) {
+            return Err("streaming window must be a multiple of 4 (encoder subsampling)".into());
+        }
+        if !self.overlap_frames.is_multiple_of(4) {
+            return Err("streaming overlap must be a multiple of 4 (encoder subsampling)".into());
+        }
+        if !(0.0..=1.0).contains(&self.fuzzy_match_threshold) {
+            return Err("fuzzy_match_threshold must be in [0.0, 1.0]".into());
+        }
+        Ok(())
+    }
+}
 
 /// A set of ONNX sessions for one inference pipeline (encoder + decoder + joiner).
 ///
@@ -292,12 +343,16 @@ pub struct PoolItemGuard<T> {
 impl<T> PoolItemGuard<T> {
     /// Mutable access to the inner item.
     pub fn item_mut(&mut self) -> &mut T {
-        self.item.as_mut().expect("PoolItemGuard item already taken")
+        self.item
+            .as_mut()
+            .expect("PoolItemGuard item already taken")
     }
 
     /// Immutable access to the inner item.
     pub fn item(&self) -> &T {
-        self.item.as_ref().expect("PoolItemGuard item already taken")
+        self.item
+            .as_ref()
+            .expect("PoolItemGuard item already taken")
     }
 
     /// Consume the guard and return the item, **without** checking it back in.
@@ -305,8 +360,6 @@ impl<T> PoolItemGuard<T> {
     pub fn into_inner(mut self) -> T {
         self.item.take().expect("PoolItemGuard item already taken")
     }
-
-
 }
 
 impl<T> Deref for PoolItemGuard<T> {
@@ -345,6 +398,19 @@ pub struct DecoderState {
     pub blank_id: usize,
     /// Count of consecutive blank frames (used for endpointing).
     pub consecutive_blanks: usize,
+}
+
+impl StreamingState {
+    /// Reset overlap-buffer state for the start of a new utterance.
+    /// Called by the VAD path after a completed speech segment is emitted.
+    pub fn reset_utterance_state(&mut self) {
+        self.decoder = DecoderState::new(self.blank_id);
+        self.accumulated_text = Arc::new(String::new());
+        self.accumulated_words = Arc::new(Vec::new());
+        self.feature_window.clear();
+        self.prev_window_words.clear();
+        self.total_frames = 0;
+    }
 }
 
 impl DecoderState {
@@ -426,6 +492,24 @@ pub struct StreamingState {
     pub feature_window: Vec<f32>,
     /// Words from the previous window, used for overlap merging.
     pub prev_window_words: Vec<WordInfo>,
+    /// Streaming configuration (window / overlap sizes).
+    pub config: StreamingConfig,
+    /// Blank token id cached so the state can be reset between utterances
+    /// without re-reading the tokenizer.
+    pub blank_id: usize,
+    /// Per-connection Silero VAD session (only when VAD is enabled).
+    pub vad_session: Option<silero::Session>,
+    /// Per-connection VAD stream state (recurrent memory + pending samples).
+    pub vad_stream_state: Option<silero::StreamState>,
+    /// Per-connection VAD speech segmenter.
+    pub vad_segmenter: Option<silero::SpeechSegmenter>,
+    /// Accumulated raw audio samples for VAD-based segmentation.
+    pub vad_audio_buffer: Vec<f32>,
+    /// Sample offset of `vad_audio_buffer[0]` relative to the start of the stream.
+    pub vad_sample_offset: u64,
+    /// Completed VAD utterances waiting for async offline ASR.
+    /// Populated by `process_chunk_vad`, drained by the WebSocket handler.
+    pub vad_pending_asr: Vec<Vec<f32>>,
     /// Diarization state (present only when diarization is enabled).
     #[cfg(feature = "diarization")]
     pub diarization_state: Option<DiarizationStreamState>,
@@ -451,6 +535,12 @@ pub struct Engine {
     pub pool: SessionPool,
     tokenizer: Tokenizer,
     mel: MelSpectrogram,
+    /// Overlap-buffer streaming configuration.
+    streaming_config: StreamingConfig,
+    /// When true, use Silero VAD for speech segmentation instead of the
+    /// fixed-size overlap-buffer. Each detected utterance is transcribed
+    /// offline, eliminating boundary artefacts.
+    vad_enabled: bool,
     /// Speaker encoder for diarization (None if model file is absent).
     #[cfg(feature = "diarization")]
     pub speaker_encoder: Option<diarization::SpeakerEncoder>,
@@ -472,6 +562,8 @@ impl Engine {
             pool: Pool::new(vec![]),
             tokenizer: Tokenizer::from_tokens(vec!["<blk>".into(), "a".into()], 0),
             mel: MelSpectrogram::new(),
+            streaming_config: StreamingConfig::default(),
+            vad_enabled: false,
             #[cfg(feature = "diarization")]
             speaker_encoder: None,
         }
@@ -491,15 +583,37 @@ impl Engine {
         Self::load_with_pool_size(model_dir, DEFAULT_POOL_SIZE)
     }
 
-    /// Load ONNX models with a custom pool size.
+    /// Load ONNX models with a custom pool size (default streaming config).
     pub fn load_with_pool_size(model_dir: &str, pool_size: usize) -> Result<Self, GigasttError> {
+        Self::load_with_pool_size_and_config(model_dir, pool_size, StreamingConfig::default())
+    }
+
+    /// Load ONNX models with a custom pool size and streaming configuration.
+    pub fn load_with_pool_size_and_config(
+        model_dir: &str,
+        pool_size: usize,
+        streaming_config: StreamingConfig,
+    ) -> Result<Self, GigasttError> {
+        Self::load_with_pool_size_and_config_and_vad(model_dir, pool_size, streaming_config, false)
+    }
+
+    /// Load ONNX models with custom pool size, streaming config, and VAD flag.
+    pub fn load_with_pool_size_and_config_and_vad(
+        model_dir: &str,
+        pool_size: usize,
+        streaming_config: StreamingConfig,
+        vad_enabled: bool,
+    ) -> Result<Self, GigasttError> {
+        streaming_config
+            .validate()
+            .map_err(|e| GigasttError::ModelLoad(format!("invalid streaming config: {e}")))?;
         let dir = Path::new(model_dir);
         if !dir.join("encoder.int8.onnx").exists() {
             return Err(GigasttError::ModelLoad(format!(
                 "encoder.int8.onnx not found in {model_dir}"
             )));
         }
-        Self::load_inner(dir, model_dir, pool_size)
+        Self::load_inner(dir, model_dir, pool_size, streaming_config, vad_enabled)
             .map_err(|e| GigasttError::ModelLoad(format!("{e:#}")))
     }
 
@@ -618,8 +732,16 @@ impl Engine {
         Ok((encoder, decoder, joiner))
     }
 
-    fn load_inner(dir: &Path, model_dir: &str, pool_size: usize) -> anyhow::Result<Self> {
-        tracing::info!("Loading Zipformer-vi INT8 ONNX models from {model_dir} (pool_size={pool_size})...");
+    fn load_inner(
+        dir: &Path,
+        model_dir: &str,
+        pool_size: usize,
+        streaming_config: StreamingConfig,
+        vad_enabled: bool,
+    ) -> anyhow::Result<Self> {
+        tracing::info!(
+            "Loading Zipformer-vi INT8 ONNX models from {model_dir} (pool_size={pool_size})..."
+        );
 
         #[cfg(feature = "coreml")]
         tracing::info!("Using CoreML execution provider (Neural Engine + CPU)");
@@ -682,6 +804,8 @@ impl Engine {
             pool: SessionPool::new(triplets),
             tokenizer,
             mel,
+            streaming_config,
+            vad_enabled,
             #[cfg(feature = "diarization")]
             speaker_encoder,
         })
@@ -700,10 +824,7 @@ impl Engine {
     /// encoder, the flag is silently ignored (a `warn!` is emitted when the
     /// caller asked for diarization but the build does not support it, so the
     /// contract mismatch is visible in logs).
-    pub fn create_state(
-        &self,
-        diarization_enabled: bool,
-    ) -> Result<StreamingState, GigasttError> {
+    pub fn create_state(&self, diarization_enabled: bool) -> Result<StreamingState, GigasttError> {
         #[cfg(feature = "diarization")]
         let diarization_state = if diarization_enabled && self.speaker_encoder.is_some() {
             Some(DiarizationStreamState {
@@ -726,8 +847,20 @@ impl Engine {
             .map_err(|e| GigasttError::Inference(format!("FBANK init failed: {e}")))?;
         let online = OnlineFeature::new(FeatureComputer::Fbank(computer));
 
+        let (vad_session, vad_stream_state, vad_segmenter) = if self.vad_enabled {
+            let session = silero::Session::bundled()
+                .map_err(|e| GigasttError::ModelLoad(format!("silero VAD load failed: {e}")))?;
+            let stream = silero::StreamState::new(silero::SampleRate::Rate16k);
+            let segmenter = silero::SpeechSegmenter::new(silero::SpeechOptions::default());
+            (Some(session), Some(stream), Some(segmenter))
+        } else {
+            (None, None, None)
+        };
+
+        let blank_id = self.tokenizer.blank_id();
+
         Ok(StreamingState {
-            decoder: DecoderState::new(self.tokenizer.blank_id()),
+            decoder: DecoderState::new(blank_id),
             online,
             frames_seen: 0,
             accumulated_text: Arc::new(String::new()),
@@ -735,6 +868,14 @@ impl Engine {
             total_frames: 0,
             feature_window: Vec::new(),
             prev_window_words: Vec::new(),
+            config: self.streaming_config.clone(),
+            blank_id,
+            vad_session,
+            vad_stream_state,
+            vad_segmenter,
+            vad_audio_buffer: Vec::new(),
+            vad_sample_offset: 0,
+            vad_pending_asr: Vec::new(),
             #[cfg(feature = "diarization")]
             diarization_state,
         })
@@ -759,6 +900,21 @@ impl Engine {
             return Ok(vec![]);
         }
 
+        // VAD path: segment speech with Silero VAD, transcribe each utterance offline.
+        if state.vad_session.is_some() {
+            return self.process_chunk_vad(samples, state, triplet);
+        }
+
+        self.process_chunk_overlap(samples, state, triplet)
+    }
+
+    /// Overlap-buffer streaming path (the original non-VAD logic).
+    fn process_chunk_overlap(
+        &self,
+        samples: &[f32],
+        state: &mut StreamingState,
+        triplet: &mut SessionTriplet,
+    ) -> Result<Vec<TranscriptSegment>, GigasttError> {
         // Keep a copy of the 16kHz samples for diarization before the buffer
         // logic potentially pads/realigns them. Skip allocation when diarization
         // is not active for this session.
@@ -777,30 +933,41 @@ impl Engine {
             return Ok(vec![]);
         }
 
-        let new_features = features::extract_online_frames(&state.online, state.frames_seen, new_frames);
+        let new_features =
+            features::extract_online_frames(&state.online, state.frames_seen, new_frames);
         state.frames_seen = ready;
         state.feature_window.extend_from_slice(&new_features);
 
         let mut emitted_words: Vec<WordInfo> = Vec::new();
         let mut endpoint = false;
 
-        while state.feature_window.len() / N_MELS >= STREAMING_WINDOW_FRAMES {
-            let num_frames = STREAMING_WINDOW_FRAMES;
+        while state.feature_window.len() / N_MELS >= state.config.window_frames {
+            let num_frames = state.config.window_frames;
             let features = &state.feature_window[..num_frames * N_MELS];
             let frame_offset = state.total_frames;
 
             let (window_words, window_endpoint, _enc_len) = self
-                .run_inference(triplet, features, num_frames, &mut state.decoder, frame_offset)
+                .run_inference(
+                    triplet,
+                    features,
+                    num_frames,
+                    &mut state.decoder,
+                    frame_offset,
+                )
                 .map_err(|e| GigasttError::Inference(format!("{e:#}")))?;
 
-            let delta = Self::delta_words(&window_words, &state.prev_window_words);
+            let delta = Self::delta_words(
+                &window_words,
+                &state.prev_window_words,
+                state.config.fuzzy_match_threshold,
+            );
             emitted_words.extend(delta);
             state.prev_window_words = window_words;
 
             // Shift window, keeping overlap
-            let shift = STREAMING_SHIFT_FRAMES * N_MELS;
+            let shift = state.config.shift_frames() * N_MELS;
             state.feature_window.drain(..shift);
-            state.total_frames += STREAMING_SHIFT_ENCODER_FRAMES;
+            state.total_frames += state.config.shift_encoder_frames();
 
             if window_endpoint {
                 endpoint = true;
@@ -883,12 +1050,144 @@ impl Engine {
         }
     }
 
+    /// VAD-based streaming: feed samples to Silero VAD, emit a Final segment
+    /// for each completed speech utterance.
+    fn process_chunk_vad(
+        &self,
+        samples: &[f32],
+        state: &mut StreamingState,
+        triplet: &mut SessionTriplet,
+    ) -> Result<Vec<TranscriptSegment>, GigasttError> {
+        state.vad_audio_buffer.extend_from_slice(samples);
+
+        // --- Run VAD inference in a scoped block so segmenter borrow ends ---
+        let (speech_segments, is_active) = {
+            let session = state.vad_session.as_mut().unwrap();
+            let stream = state.vad_stream_state.as_mut().unwrap();
+            let segmenter = state.vad_segmenter.as_mut().unwrap();
+
+            let mut segments: Vec<silero::SpeechSegment> = Vec::new();
+            session
+                .process_stream(stream, samples, |probability| {
+                    if let Some(segment) = segmenter.push_probability(probability) {
+                        segments.push(segment);
+                    }
+                })
+                .map_err(|e| GigasttError::Inference(format!("VAD inference failed: {e}")))?;
+
+            let active = segmenter.is_active();
+            (segments, active)
+        };
+
+        let mut emitted_segments: Vec<TranscriptSegment> = Vec::new();
+        let buffer_start = state.vad_sample_offset;
+
+        // Queue completed utterances for async offline ASR so VAD can keep
+        // listening without blocking on the encoder.
+        for segment in &speech_segments {
+            let buf_start = segment.start_sample().saturating_sub(buffer_start) as usize;
+            let buf_end = segment.end_sample().saturating_sub(buffer_start) as usize;
+            if buf_end > state.vad_audio_buffer.len() {
+                tracing::warn!("VAD segment extends beyond audio buffer, skipping");
+                continue;
+            }
+            let speech_samples = &state.vad_audio_buffer[buf_start..buf_end];
+            if speech_samples.is_empty() {
+                continue;
+            }
+            state.vad_pending_asr.push(speech_samples.to_vec());
+            state.reset_utterance_state();
+        }
+
+        // Drain processed audio from the buffer.
+        if let Some(last_seg) = speech_segments.last() {
+            let remove_up_to = (last_seg.end_sample().saturating_sub(buffer_start)) as usize;
+            if remove_up_to <= state.vad_audio_buffer.len() {
+                state.vad_audio_buffer.drain(..remove_up_to);
+                state.vad_sample_offset += remove_up_to as u64;
+            }
+        }
+
+        // Emit Partial segments while speech is still active.
+        if is_active {
+            let partials = self.process_chunk_overlap(samples, state, triplet)?;
+            emitted_segments.extend(partials);
+        }
+
+        Ok(emitted_segments)
+    }
+
+    /// VAD flush: process any trailing pending samples and close the final
+    /// open speech segment.
+    fn flush_state_vad(
+        &self,
+        state: &mut StreamingState,
+        triplet: &mut SessionTriplet,
+    ) -> Option<TranscriptSegment> {
+        let session = state.vad_session.as_mut()?;
+        let stream = state.vad_stream_state.as_mut()?;
+        let segmenter = state.vad_segmenter.as_mut()?;
+
+        // Flush pending VAD samples.
+        if let Ok(Some(probability)) = session.flush_stream(stream)
+            && let Some(segment) = segmenter.push_probability(probability)
+        {
+            let buffer_start = state.vad_sample_offset;
+            let buf_start = segment.start_sample().saturating_sub(buffer_start) as usize;
+            let buf_end = (segment.end_sample().saturating_sub(buffer_start) as usize)
+                .min(state.vad_audio_buffer.len());
+            if buf_start < buf_end {
+                let speech_samples = &state.vad_audio_buffer[buf_start..buf_end];
+                if let Ok(result) = self.transcribe_samples(speech_samples, triplet)
+                    && !result.text.is_empty()
+                {
+                    state.reset_utterance_state();
+                    return Some(TranscriptSegment {
+                        text: Arc::new(result.text),
+                        words: Arc::new(result.words),
+                        is_final: true,
+                        timestamp: now_timestamp(),
+                    });
+                }
+            }
+        }
+
+        // Close any trailing open segment.
+        if let Some(segment) = segmenter.finish() {
+            let buffer_start = state.vad_sample_offset;
+            let buf_start = segment.start_sample().saturating_sub(buffer_start) as usize;
+            let buf_end = (segment.end_sample().saturating_sub(buffer_start) as usize)
+                .min(state.vad_audio_buffer.len());
+            if buf_start < buf_end {
+                let speech_samples = &state.vad_audio_buffer[buf_start..buf_end];
+                if let Ok(result) = self.transcribe_samples(speech_samples, triplet)
+                    && !result.text.is_empty()
+                {
+                    state.reset_utterance_state();
+                    return Some(TranscriptSegment {
+                        text: Arc::new(result.text),
+                        words: Arc::new(result.words),
+                        is_final: true,
+                        timestamp: now_timestamp(),
+                    });
+                }
+            }
+        }
+
+        None
+    }
+
     /// Flush accumulated text as a Final segment (called on Stop/Close).
     pub fn flush_state(
         &self,
         state: &mut StreamingState,
         triplet: &mut SessionTriplet,
     ) -> Option<TranscriptSegment> {
+        // VAD path: flush pending samples and emit trailing segment.
+        if state.vad_session.is_some() {
+            return self.flush_state_vad(state, triplet);
+        }
+
         state.online.input_finished();
         let ready = state.online.num_frames_ready();
         let new_frames = ready.saturating_sub(state.frames_seen);
@@ -904,9 +1203,19 @@ impl Engine {
             let features = &state.feature_window[..];
             let frame_offset = state.total_frames;
             let (window_words, _endpoint, _enc_len) = self
-                .run_inference(triplet, features, num_frames, &mut state.decoder, frame_offset)
+                .run_inference(
+                    triplet,
+                    features,
+                    num_frames,
+                    &mut state.decoder,
+                    frame_offset,
+                )
                 .ok()?;
-            let delta = Self::delta_words(&window_words, &state.prev_window_words);
+            let delta = Self::delta_words(
+                &window_words,
+                &state.prev_window_words,
+                state.config.fuzzy_match_threshold,
+            );
             let acc_text = Arc::make_mut(&mut state.accumulated_text);
             let acc_words = Arc::make_mut(&mut state.accumulated_words);
             for w in &delta {
@@ -1158,8 +1467,8 @@ impl Engine {
     }
 
     /// Return the words from `new` that are not already present in `prev`,
-    /// using a simple suffix/prefix overlap merge.
-    fn delta_words(new: &[WordInfo], prev: &[WordInfo]) -> Vec<WordInfo> {
+    /// using a suffix/prefix overlap merge with optional fuzzy matching.
+    fn delta_words(new: &[WordInfo], prev: &[WordInfo], fuzzy_threshold: f32) -> Vec<WordInfo> {
         if prev.is_empty() {
             return new.to_vec();
         }
@@ -1167,7 +1476,7 @@ impl Engine {
         for start in 0..prev.len() {
             let mut matched = 0;
             for (a, b) in new.iter().zip(prev[start..].iter()) {
-                if a.word == b.word {
+                if words_match(&a.word, &b.word, fuzzy_threshold) {
                     matched += 1;
                 } else {
                     break;
@@ -1179,6 +1488,53 @@ impl Engine {
         }
         new[best..].to_vec()
     }
+}
+
+/// Compute Levenshtein edit distance between two strings.
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a_len = a.chars().count();
+    let b_len = b.chars().count();
+    if a_len == 0 {
+        return b_len;
+    }
+    if b_len == 0 {
+        return a_len;
+    }
+    let mut prev = vec![0; b_len + 1];
+    let mut curr = vec![0; b_len + 1];
+    for (j, item) in prev.iter_mut().enumerate().take(b_len + 1) {
+        *item = j;
+    }
+    for (i, ca) in a.chars().enumerate() {
+        curr[0] = i + 1;
+        for (j, cb) in b.chars().enumerate() {
+            let cost = if ca == cb { 0 } else { 1 };
+            curr[j + 1] = (curr[j] + 1).min(prev[j + 1] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[b_len]
+}
+
+/// Normalized similarity in [0.0, 1.0]. 1.0 = identical.
+fn word_similarity(a: &str, b: &str) -> f32 {
+    if a == b {
+        return 1.0;
+    }
+    let dist = levenshtein(a, b);
+    let max_len = a.chars().count().max(b.chars().count());
+    if max_len == 0 {
+        return 1.0;
+    }
+    1.0 - (dist as f32 / max_len as f32)
+}
+
+/// Check whether two words match, respecting the fuzzy threshold.
+fn words_match(a: &str, b: &str, threshold: f32) -> bool {
+    if threshold >= 1.0 {
+        return a == b;
+    }
+    word_similarity(a, b) >= threshold
 }
 
 /// Result of file transcription, including word-level details.
@@ -1380,7 +1736,11 @@ mod tests {
         assert!(result.is_err(), "panic should have occurred");
 
         // The guard's Drop automatically returns the (possibly mutated) item.
-        assert_eq!(pool.available(), 1, "pool slot must be recovered after panic");
+        assert_eq!(
+            pool.available(),
+            1,
+            "pool slot must be recovered after panic"
+        );
 
         // Verify the item was actually returned (not just forgotten).
         let g = pool.checkout().await.expect("checkout after panic");
@@ -1388,11 +1748,411 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_pool_all_slots_recovered_after_panic_storm() {
+        // Spec 001: If every checkout panics simultaneously, every slot must
+        // still be recovered.
+        let pool = std::sync::Arc::new(Pool::new(vec![1u32, 2, 3, 4]));
+        assert_eq!(pool.available(), 4);
+
+        let mut handles = Vec::new();
+        for _ in 0..4 {
+            let pool = pool.clone();
+            handles.push(tokio::spawn(async move {
+                let guard = pool.checkout().await.expect("checkout");
+                let (item, reservation) = guard.into_owned();
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                    let guard = reservation.guard(item);
+                    let _ = *guard;
+                    panic!("simulated inference panic");
+                }));
+            }));
+        }
+
+        for h in handles {
+            let _ = h.await;
+        }
+
+        assert_eq!(
+            pool.available(),
+            4,
+            "all pool slots must be recovered after panic storm"
+        );
+    }
+
+    // ---- StreamingConfig --------------------------------------------------
+
+    #[test]
+    fn test_streaming_config_defaults() {
+        let cfg = StreamingConfig::default();
+        assert_eq!(cfg.window_frames, 400);
+        assert_eq!(cfg.overlap_frames, 100);
+        assert_eq!(cfg.fuzzy_match_threshold, 1.0);
+        assert_eq!(cfg.shift_frames(), 300);
+        assert_eq!(cfg.shift_encoder_frames(), 75);
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn test_streaming_config_validation() {
+        assert!(
+            StreamingConfig {
+                window_frames: 0,
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            StreamingConfig {
+                window_frames: 100,
+                overlap_frames: 100,
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            StreamingConfig {
+                window_frames: 100,
+                overlap_frames: 50,
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            StreamingConfig {
+                window_frames: 200,
+                overlap_frames: 40,
+                fuzzy_match_threshold: 1.5,
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            StreamingConfig {
+                window_frames: 200,
+                overlap_frames: 40,
+                fuzzy_match_threshold: 0.8,
+            }
+            .validate()
+            .is_ok()
+        );
+    }
+
+    // ---- Fuzzy word match --------------------------------------------------
+
+    #[test]
+    fn test_levenshtein_basic() {
+        assert_eq!(levenshtein("kitten", "sitting"), 3);
+        assert_eq!(levenshtein("", "abc"), 3);
+        assert_eq!(levenshtein("abc", ""), 3);
+        assert_eq!(levenshtein("abc", "abc"), 0);
+        assert_eq!(levenshtein("ab", "abc"), 1);
+    }
+
+    #[test]
+    fn test_word_similarity() {
+        assert!((word_similarity("hello", "hello") - 1.0).abs() < f32::EPSILON);
+        assert!(word_similarity("hello", "hallo") > 0.7);
+        assert!(word_similarity("hello", "world") < 0.5);
+    }
+
+    #[test]
+    fn test_words_match_exact_threshold() {
+        assert!(words_match("hello", "hello", 1.0));
+        assert!(!words_match("hello", "hallo", 1.0));
+    }
+
+    #[test]
+    fn test_words_match_fuzzy() {
+        assert!(words_match("hello", "hallo", 0.7));
+        assert!(!words_match("hello", "world", 0.7));
+    }
+
+    #[test]
+    fn test_delta_words_exact() {
+        let mk = |w: &str| WordInfo {
+            word: w.into(),
+            start: 0.0,
+            end: 0.0,
+            confidence: 1.0,
+            speaker: None,
+        };
+        let prev = vec![mk("a"), mk("b"), mk("c")];
+        let new = vec![mk("b"), mk("c"), mk("d")];
+        let delta = Engine::delta_words(&new, &prev, 1.0);
+        assert_eq!(delta.len(), 1);
+        assert_eq!(delta[0].word, "d");
+    }
+
+    #[test]
+    fn test_delta_words_fuzzy() {
+        let mk = |w: &str| WordInfo {
+            word: w.into(),
+            start: 0.0,
+            end: 0.0,
+            confidence: 1.0,
+            speaker: None,
+        };
+        // "helio" vs "hello" — one char diff, 80% similarity
+        let prev = vec![mk("a"), mk("hello")];
+        let new = vec![mk("helio"), mk("b")];
+        let delta_exact = Engine::delta_words(&new, &prev, 1.0);
+        // exact: no match for "helio" vs "hello", so best = 0
+        assert_eq!(delta_exact.len(), 2);
+
+        let delta_fuzzy = Engine::delta_words(&new, &prev, 0.7);
+        // fuzzy: "helio" ~= "hello", matched = 1, best = 1
+        assert_eq!(delta_fuzzy.len(), 1);
+        assert_eq!(delta_fuzzy[0].word, "b");
+    }
+
+    #[tokio::test]
+    async fn test_vad_streaming_produces_same_text_as_offline() {
+        // Skip if model is not downloaded.
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+        let model_dir = home.as_ref().map(|p| p.join(".phostt/models"));
+        if model_dir.is_none()
+            || !model_dir
+                .as_ref()
+                .unwrap()
+                .join("encoder.int8.onnx")
+                .exists()
+        {
+            eprintln!("Skipping test_vad_streaming: model not found");
+            return;
+        }
+        let model_dir = model_dir.unwrap();
+        let wav_path = model_dir.join("test_wavs").join("0.wav");
+        if !wav_path.exists() {
+            eprintln!("Skipping test_vad_streaming: test WAV not found");
+            return;
+        }
+        let samples = audio::decode_audio_file(wav_path.to_str().unwrap()).unwrap();
+
+        let engine = Engine::load_with_pool_size_and_config_and_vad(
+            model_dir.to_str().unwrap(),
+            1,
+            StreamingConfig::default(),
+            true,
+        )
+        .unwrap();
+        let mut triplet = engine.pool.checkout().await.unwrap();
+
+        let offline = engine.transcribe_samples(&samples, &mut triplet).unwrap();
+        let offline_text = offline.text;
+
+        let mut state = engine.create_state(false).unwrap();
+        let chunk_size = samples.len() / 3;
+        let chunks = vec![
+            &samples[..chunk_size],
+            &samples[chunk_size..2 * chunk_size],
+            &samples[2 * chunk_size..],
+        ];
+
+        let mut vad_text = String::new();
+        for chunk in chunks {
+            let segs = engine
+                .process_chunk(chunk, &mut state, &mut triplet)
+                .unwrap();
+            // Drain async ASR queue (completed VAD utterances) and accumulate
+            // the offline transcripts as Final text.
+            for audio in state.vad_pending_asr.drain(..) {
+                let result = engine.transcribe_samples(&audio, &mut triplet).unwrap();
+                if !result.text.is_empty() {
+                    if !vad_text.is_empty() {
+                        vad_text.push(' ');
+                    }
+                    vad_text.push_str(&result.text);
+                }
+            }
+            // Partial segments from the overlap-buffer are ignored for the
+            // final-text comparison.
+            let _ = segs;
+        }
+        if let Some(flush) = engine.flush_state(&mut state, &mut triplet) {
+            if !vad_text.is_empty() {
+                vad_text.push(' ');
+            }
+            vad_text.push_str(&flush.text);
+        }
+
+        let normalize = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert_eq!(
+            normalize(&vad_text),
+            normalize(&offline_text),
+            "VAD streaming transcript should match offline transcript"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_vad_hybrid_emits_partials() {
+        // Skip if model is not downloaded.
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+        let model_dir = home.as_ref().map(|p| p.join(".phostt/models"));
+        if model_dir.is_none()
+            || !model_dir
+                .as_ref()
+                .unwrap()
+                .join("encoder.int8.onnx")
+                .exists()
+        {
+            eprintln!("Skipping test_vad_hybrid_emits_partials: model not found");
+            return;
+        }
+        let model_dir = model_dir.unwrap();
+        let wav_path = model_dir.join("test_wavs").join("0.wav");
+        if !wav_path.exists() {
+            eprintln!("Skipping test_vad_hybrid_emits_partials: test WAV not found");
+            return;
+        }
+        let samples = audio::decode_audio_file(wav_path.to_str().unwrap()).unwrap();
+
+        // Use a small window so overlap-buffer produces partials even on short audio.
+        let config = StreamingConfig {
+            window_frames: 100,
+            overlap_frames: 20,
+            fuzzy_match_threshold: 1.0,
+        };
+        let engine = Engine::load_with_pool_size_and_config_and_vad(
+            model_dir.to_str().unwrap(),
+            1,
+            config,
+            true,
+        )
+        .unwrap();
+        let mut triplet = engine.pool.checkout().await.unwrap();
+        let mut state = engine.create_state(false).unwrap();
+
+        // Feed audio in small chunks so VAD sees active speech before the segment completes.
+        let chunk_size = samples.len() / 10;
+        let mut partial_count = 0usize;
+        let mut final_count = 0usize;
+        for i in 0..10 {
+            let end = ((i + 1) * chunk_size).min(samples.len());
+            let chunk = &samples[i * chunk_size..end];
+            let segs = engine
+                .process_chunk(chunk, &mut state, &mut triplet)
+                .unwrap();
+            for seg in &segs {
+                if seg.is_final {
+                    final_count += 1;
+                } else {
+                    partial_count += 1;
+                }
+            }
+            // Drain async ASR queue and count the resulting Final segments.
+            for audio in state.vad_pending_asr.drain(..) {
+                let result = engine.transcribe_samples(&audio, &mut triplet).unwrap();
+                if !result.text.is_empty() {
+                    final_count += 1;
+                }
+            }
+        }
+        if let Some(flush) = engine.flush_state(&mut state, &mut triplet)
+            && flush.is_final
+        {
+            final_count += 1;
+        }
+
+        assert!(
+            partial_count > 0,
+            "VAD hybrid should emit Partial segments during active speech, got {partial_count}"
+        );
+        assert!(
+            final_count > 0,
+            "VAD hybrid should emit at least one Final segment, got {final_count}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_vad_hybrid_matches_offline() {
+        // Skip if model is not downloaded.
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+        let model_dir = home.as_ref().map(|p| p.join(".phostt/models"));
+        if model_dir.is_none()
+            || !model_dir
+                .as_ref()
+                .unwrap()
+                .join("encoder.int8.onnx")
+                .exists()
+        {
+            eprintln!("Skipping test_vad_hybrid_matches_offline: model not found");
+            return;
+        }
+        let model_dir = model_dir.unwrap();
+        let wav_path = model_dir.join("test_wavs").join("0.wav");
+        if !wav_path.exists() {
+            eprintln!("Skipping test_vad_hybrid_matches_offline: test WAV not found");
+            return;
+        }
+        let samples = audio::decode_audio_file(wav_path.to_str().unwrap()).unwrap();
+
+        let engine = Engine::load_with_pool_size_and_config_and_vad(
+            model_dir.to_str().unwrap(),
+            1,
+            StreamingConfig::default(),
+            true,
+        )
+        .unwrap();
+        let mut triplet = engine.pool.checkout().await.unwrap();
+
+        let offline = engine.transcribe_samples(&samples, &mut triplet).unwrap();
+        let offline_text = offline.text;
+
+        let mut state = engine.create_state(false).unwrap();
+        let chunk_size = samples.len() / 4;
+        let chunks = vec![
+            &samples[..chunk_size],
+            &samples[chunk_size..2 * chunk_size],
+            &samples[2 * chunk_size..3 * chunk_size],
+            &samples[3 * chunk_size..],
+        ];
+
+        let mut hybrid_text = String::new();
+        for chunk in chunks {
+            let _segs = engine
+                .process_chunk(chunk, &mut state, &mut triplet)
+                .unwrap();
+            // Drain async ASR queue (completed VAD utterances).
+            for audio in state.vad_pending_asr.drain(..) {
+                let result = engine.transcribe_samples(&audio, &mut triplet).unwrap();
+                if !result.text.is_empty() {
+                    if !hybrid_text.is_empty() {
+                        hybrid_text.push(' ');
+                    }
+                    hybrid_text.push_str(&result.text);
+                }
+            }
+        }
+        if let Some(flush) = engine.flush_state(&mut state, &mut triplet) {
+            if !hybrid_text.is_empty() {
+                hybrid_text.push(' ');
+            }
+            hybrid_text.push_str(&flush.text);
+        }
+
+        let normalize = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert_eq!(
+            normalize(&hybrid_text),
+            normalize(&offline_text),
+            "VAD hybrid final transcript should match offline transcript"
+        );
+    }
+
+    #[tokio::test]
     async fn test_streaming_matches_offline() {
         // Skip if model is not downloaded.
         let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
         let model_dir = home.as_ref().map(|p| p.join(".phostt/models"));
-        if model_dir.is_none() || !model_dir.as_ref().unwrap().join("encoder.int8.onnx").exists() {
+        if model_dir.is_none()
+            || !model_dir
+                .as_ref()
+                .unwrap()
+                .join("encoder.int8.onnx")
+                .exists()
+        {
             eprintln!("Skipping test_streaming_matches_offline: model not found");
             return;
         }
@@ -1419,7 +2179,9 @@ mod tests {
 
         let mut streaming_text = String::new();
         for chunk in chunks {
-            let segs = engine.process_chunk(chunk, &mut state, &mut triplet).unwrap();
+            let segs = engine
+                .process_chunk(chunk, &mut state, &mut triplet)
+                .unwrap();
             for seg in segs {
                 if seg.is_final {
                     if !streaming_text.is_empty() {

@@ -11,7 +11,7 @@
 //! All functions are `unsafe` by nature (raw pointers cross the FFI boundary) but
 //! the implementation checks nulls and logs errors before returning sentinel values.
 
-use std::ffi::{c_char, CStr, CString};
+use std::ffi::{CStr, CString, c_char};
 use std::ptr;
 
 use crate::inference::audio;
@@ -376,16 +376,21 @@ mod tests {
         let engine_ptr = Box::into_raw(Box::new(PhosttEngine { engine }));
 
         // null engine
-        let r = unsafe { phostt_stream_process_chunk(ptr::null_mut(), ptr::null_mut(), ptr::null(), 0, 16000) };
+        let r = unsafe {
+            phostt_stream_process_chunk(ptr::null_mut(), ptr::null_mut(), ptr::null(), 0, 16000)
+        };
         assert!(r.is_null());
 
         // null stream
-        let r = unsafe { phostt_stream_process_chunk(engine_ptr, ptr::null_mut(), ptr::null(), 0, 16000) };
+        let r = unsafe {
+            phostt_stream_process_chunk(engine_ptr, ptr::null_mut(), ptr::null(), 0, 16000)
+        };
         assert!(r.is_null());
 
         // null pcm16
         let dummy_stream = 0x1 as *mut PhosttStream;
-        let r = unsafe { phostt_stream_process_chunk(engine_ptr, dummy_stream, ptr::null(), 0, 16000) };
+        let r =
+            unsafe { phostt_stream_process_chunk(engine_ptr, dummy_stream, ptr::null(), 0, 16000) };
         assert!(r.is_null());
 
         unsafe { phostt_engine_free(engine_ptr) };

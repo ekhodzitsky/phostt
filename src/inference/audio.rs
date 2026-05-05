@@ -164,13 +164,21 @@ where
     let source = BytesMediaSource::new(data);
     let mss = MediaSourceStream::new(Box::new(source), Default::default());
     let probed = symphonia::default::get_probe()
-        .format(&Hint::new(), mss, &FormatOptions::default(), &MetadataOptions::default())
+        .format(
+            &Hint::new(),
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
         .context("Unsupported audio format")?;
 
     let mut format = probed.format;
     let track = format.default_track().context("No audio track found")?;
     let track_id = track.id;
-    let sample_rate = track.codec_params.sample_rate.context("Unknown sample rate")?;
+    let sample_rate = track
+        .codec_params
+        .sample_rate
+        .context("Unknown sample rate")?;
     let channels = track.codec_params.channels.map(|c| c.count()).unwrap_or(1);
 
     tracing::info!("Audio streaming: {sample_rate}Hz, {channels}ch");
@@ -237,7 +245,8 @@ where
             let chunk_samples = sample_rate as usize;
             while resample_buf.len() >= chunk_samples {
                 let chunk = resample_buf.drain(..chunk_samples).collect::<Vec<_>>();
-                let resampled = resample(&chunk, sample_rate, 16000).context("Resampling failed")?;
+                let resampled =
+                    resample(&chunk, sample_rate, 16000).context("Resampling failed")?;
                 on_chunk(&resampled)?;
             }
         } else {
@@ -491,9 +500,15 @@ mod tests {
         wav.resize(file_size as usize, 0);
 
         let result = decode_audio_bytes(&wav);
-        assert!(result.is_err(), "Should reject audio exceeding duration cap");
+        assert!(
+            result.is_err(),
+            "Should reject audio exceeding duration cap"
+        );
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("too long"), "Error should mention duration: {err}");
+        assert!(
+            err.contains("too long"),
+            "Error should mention duration: {err}"
+        );
     }
 
     #[test]
@@ -517,8 +532,8 @@ mod tests {
         wav.extend_from_slice(b"data");
         wav.extend_from_slice(&data_size.to_le_bytes());
         for i in 0..num_samples {
-            let sample = ((440.0 * 2.0 * std::f64::consts::PI * i as f64 / 16000.0).sin() * 1000.0)
-                as i16;
+            let sample =
+                ((440.0 * 2.0 * std::f64::consts::PI * i as f64 / 16000.0).sin() * 1000.0) as i16;
             wav.extend_from_slice(&sample.to_le_bytes());
         }
 
@@ -536,7 +551,10 @@ mod tests {
         let result = resample(&samples, 16000, 16000).unwrap();
         assert_eq!(result.len(), samples.len());
         for (a, b) in samples.iter().zip(result.iter()) {
-            assert!((a - b).abs() < 1e-6, "Same-rate resample should be identity");
+            assert!(
+                (a - b).abs() < 1e-6,
+                "Same-rate resample should be identity"
+            );
         }
     }
 
@@ -577,8 +595,8 @@ mod tests {
         wav.extend_from_slice(b"data");
         wav.extend_from_slice(&data_size.to_le_bytes());
         for i in 0..num_samples {
-            let sample = ((440.0 * 2.0 * std::f64::consts::PI * i as f64 / 16000.0).sin() * 1000.0)
-                as i16;
+            let sample =
+                ((440.0 * 2.0 * std::f64::consts::PI * i as f64 / 16000.0).sin() * 1000.0) as i16;
             wav.extend_from_slice(&sample.to_le_bytes());
         }
 

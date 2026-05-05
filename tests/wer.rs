@@ -1,14 +1,11 @@
-use phostt::inference::{audio, Engine};
+use phostt::inference::{Engine, audio};
 
 const REFERENCES: &[(&str, &str)] = &[
     (
         "0.wav",
         "RỒI CŨNG HỖ TRỢ CHO LÂU LÂU CŨNG CHO GẠO CHO NÀY KIA",
     ),
-    (
-        "1.wav",
-        "NHỮNG NƠI ĐÃ KHỐNG CHẾ ĐƯỢC CĂN BỆNH",
-    ),
+    ("1.wav", "NHỮNG NƠI ĐÃ KHỐNG CHẾ ĐƯỢC CĂN BỆNH"),
     ("2.wav", "ÂM LƯỢNG TV GIẢM"),
 ];
 
@@ -30,9 +27,7 @@ fn levenshtein(a: &[&str], b: &[&str]) -> usize {
         curr[0] = i;
         for j in 1..=m {
             let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
-            curr[j] = (curr[j - 1] + 1)
-                .min(prev[j] + 1)
-                .min(prev[j - 1] + cost);
+            curr[j] = (curr[j - 1] + 1).min(prev[j] + 1).min(prev[j - 1] + cost);
         }
         std::mem::swap(&mut prev, &mut curr);
     }

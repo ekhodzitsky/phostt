@@ -163,7 +163,9 @@ async fn test_ws_configure_valid_sample_rate() {
     let audio = common::pcm16_from_wav(&common::test_wav_path(0));
     let one_sec_bytes = 16000usize * 2; // 1 second at 16kHz
     let chunk = &audio[..audio.len().min(one_sec_bytes)];
-    sink.send(Message::Binary(chunk.to_vec().into())).await.unwrap();
+    sink.send(Message::Binary(chunk.to_vec().into()))
+        .await
+        .unwrap();
 
     // Send Stop
     sink.send(Message::Text(

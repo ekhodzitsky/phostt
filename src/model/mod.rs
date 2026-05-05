@@ -65,16 +65,14 @@ impl DownloadProgress {
 /// [`MODEL_BUNDLE_SHA256`] need to move when we re-pin.
 const MODEL_BUNDLE_REPO: &str = "k2-fsa/sherpa-onnx";
 const MODEL_BUNDLE_RELEASE: &str = "asr-models";
-const MODEL_BUNDLE_FILENAME: &str = "sherpa-onnx-zipformer-vi-30M-int8-2026-02-09.tar.bz2";
+const MODEL_BUNDLE_FILENAME: &str = "sherpa-onnx-zipformer-vi-int8-2025-04-20.tar.bz2";
 /// Top-level directory inside the tarball. We strip this prefix on
 /// extraction so phostt sees a flat `<model_dir>/encoder.int8.onnx` layout.
-const MODEL_BUNDLE_TOP_DIR: &str = "sherpa-onnx-zipformer-vi-30M-int8-2026-02-09";
+const MODEL_BUNDLE_TOP_DIR: &str = "sherpa-onnx-zipformer-vi-int8-2025-04-20";
 
-/// SHA-256 of the published `*.tar.bz2`. Verified against the GitHub release
-/// asset on 2026-04-21 (26 442 384 bytes); refresh whenever the bundle is
-/// re-uploaded.
+/// SHA-256 of the published `*.tar.bz2`. Verified on 2026-05-05.
 const MODEL_BUNDLE_SHA256: &str =
-    "da8b637947091829d7ee9eda23da2a4ec7caa399233a3f4e34eb719fb2ea6b9b";
+    "48d0fdc9b3515eb9b00c4dfec2883207ee5ebe5c95b1959e7afce87fc3391938";
 
 /// Files we require under `<model_dir>/` after extraction. `model_files_exist`
 /// uses this list to short-circuit subsequent runs without re-downloading.
@@ -155,6 +153,11 @@ pub async fn ensure_model(model_dir: &str) -> Result<()> {
     // Discard the archive once contents are in place — it is large and
     // re-downloads cheaply if we ever need a fresh copy.
     let _ = std::fs::remove_file(&archive_dest);
+
+    // sherpa-onnx bundles may ship epoch-specific filenames (e.g.
+    // `encoder-epoch-12-avg-8.int8.onnx`). Normalize to stable names so the
+    // engine loader does not need to glob.
+    normalize_model_filenames(dir)?;
 
     if !model_files_exist(dir) {
         anyhow::bail!(
@@ -317,6 +320,53 @@ async fn stream_to_partial_then_finalize(
     Ok(())
 }
 
+/// After extraction, rename encoder/decoder/joiner ONNX files from
+/// sherpa-onnx epoch-specific names (e.g. `encoder-epoch-12-avg-8.int8.onnx`)
+/// to the stable names expected by the engine (`encoder.int8.onnx`, etc.).
+fn normalize_model_filenames(dir: &Path) -> Result<()> {
+    let renames: &[(&str, &str)] = &[
+        ("encoder", "encoder.int8.onnx"),
+        ("decoder", "decoder.onnx"),
+        ("joiner", "joiner.int8.onnx"),
+    ];
+    for (prefix, target_name) in renames {
+        let target = dir.join(target_name);
+        if target.exists() {
+            continue;
+        }
+        let mut candidates: Vec<_> = std::fs::read_dir(dir)
+            .with_context(|| {
+                format!(
+                    "Failed to read model dir {} for normalization",
+                    dir.display()
+                )
+            })?
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                let name = e.file_name().to_string_lossy().to_lowercase();
+                name.starts_with(prefix) && name.ends_with(".onnx")
+            })
+            .collect();
+        // Prefer the shortest name (most generic) if multiple match.
+        candidates.sort_by_key(|e| e.file_name().len());
+        if let Some(entry) = candidates.first() {
+            tracing::info!(
+                "Renaming {} -> {}",
+                entry.file_name().to_string_lossy(),
+                target_name
+            );
+            std::fs::rename(entry.path(), &target).with_context(|| {
+                format!(
+                    "Failed to rename {} -> {}",
+                    entry.path().display(),
+                    target.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
 /// Extract a `.tar.bz2` archive into `dest_dir`, stripping the top-level
 /// directory ([`MODEL_BUNDLE_TOP_DIR`]) so files land at
 /// `<dest_dir>/<file>` instead of
@@ -371,9 +421,8 @@ fn extract_bundle(archive: &Path, dest_dir: &Path) -> Result<()> {
 
         let target = dest_dir.join(&relative);
         if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent).with_context(|| {
-                format!("Failed to create directory {}", parent.display())
-            })?;
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create directory {}", parent.display()))?;
         }
         entry
             .unpack(&target)
@@ -556,7 +605,13 @@ mod tests {
         // Sanity-check the constant rather than the runtime extractor: every
         // file the engine needs must appear in MODEL_FILES so a missed entry
         // surfaces as a unit-test failure instead of a runtime mystery.
-        for required in ["encoder.int8.onnx", "decoder.onnx", "joiner.int8.onnx", "bpe.model", "tokens.txt"] {
+        for required in [
+            "encoder.int8.onnx",
+            "decoder.onnx",
+            "joiner.int8.onnx",
+            "bpe.model",
+            "tokens.txt",
+        ] {
             assert!(
                 MODEL_FILES.contains(&required),
                 "MODEL_FILES is missing required entry {required}"
@@ -569,8 +624,8 @@ mod tests {
         // Build a tiny in-memory tar.bz2 that mirrors the upstream layout
         // (top-level dir + a few files) so we exercise the strip-prefix
         // and traversal-guard logic without touching the network.
-        use bzip2::write::BzEncoder;
         use bzip2::Compression;
+        use bzip2::write::BzEncoder;
         use std::io::Cursor;
         use tar::Header;
 
@@ -579,7 +634,9 @@ mod tests {
             header.set_size(data.len() as u64);
             header.set_mode(0o644);
             header.set_cksum();
-            builder.append_data(&mut header, path, Cursor::new(data)).unwrap();
+            builder
+                .append_data(&mut header, path, Cursor::new(data))
+                .unwrap();
         }
 
         // Happy path: top-dir prefix is stripped.

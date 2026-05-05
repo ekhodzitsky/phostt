@@ -720,6 +720,34 @@ async fn handle_ws(socket: WebSocket, peer: SocketAddr, state: Arc<http::AppStat
     // degrades gracefully — matches the pre-rewrite contract.
     let (triplet, reservation) = guard.into_owned();
 
+    // Spec 001: background monitor that warns if the pool stays exhausted
+    // for an extended period, indicating a possible slot leak.
+    let pool_monitor_engine = state.engine.clone();
+    let pool_monitor_cancel = state.shutdown.clone();
+    tokio::spawn(async move {
+        let mut last_nonzero = tokio::time::Instant::now();
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                biased;
+                _ = pool_monitor_cancel.cancelled() => break,
+                _ = ticker.tick() => {
+                    let available = pool_monitor_engine.pool.available();
+                    let total = pool_monitor_engine.pool.total();
+                    if available > 0 {
+                        last_nonzero = tokio::time::Instant::now();
+                    } else if total > 0 && last_nonzero.elapsed() > std::time::Duration::from_secs(30) {
+                        tracing::warn!(
+                            pool_total = total,
+                            "Pool has been exhausted for >30s — possible slot leak"
+                        );
+                    }
+                }
+            }
+        }
+    });
+
     let (triplet_opt, result) = handle_ws_inner(
         socket,
         peer,
@@ -885,12 +913,12 @@ async fn handle_binary_frame(
             );
             *triplet_opt = Some(triplet_back);
             match engine.create_state(false) {
-            Ok(state) => *state_opt = Some(state),
-            Err(e) => {
-                tracing::error!("Failed to create streaming state after panic: {e}");
-                // Session will error out on next frame
+                Ok(state) => *state_opt = Some(state),
+                Err(e) => {
+                    tracing::error!("Failed to create streaming state after panic: {e}");
+                    // Session will error out on next frame
+                }
             }
-        }
             send_server_message(
                 sink,
                 &ServerMessage::Error {
@@ -1077,7 +1105,10 @@ async fn handle_ws_inner(
         Ok(state) => Some(state),
         Err(e) => {
             tracing::error!("State init failed: {e}");
-            return (Some(triplet), Err(anyhow::anyhow!("State init failed: {e}")));
+            return (
+                Some(triplet),
+                Err(anyhow::anyhow!("State init failed: {e}")),
+            );
         }
     };
     let mut triplet_opt = Some(triplet);
@@ -1092,6 +1123,48 @@ async fn handle_ws_inner(
 
     // V1-04: wall-clock deadline independent of `idle_timeout`.
     let session_deadline = session_deadline_instant(limits.max_session_secs);
+
+    // Async ASR pipeline: completed VAD utterances are off-loaded to a
+    // background worker so the WebSocket loop can keep accepting audio
+    // while offline ASR runs.
+    let (asr_tx, mut asr_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<f32>>();
+    let (final_tx, mut final_rx) =
+        tokio::sync::mpsc::unbounded_channel::<crate::inference::TranscriptSegment>();
+
+    let asr_engine = engine.clone();
+    let _asr_handle = tokio::spawn(async move {
+        while let Some(audio) = asr_rx.recv().await {
+            let Ok(guard) = asr_engine.pool.checkout().await else {
+                tracing::warn!("ASR worker: pool checkout failed, dropping utterance");
+                continue;
+            };
+            let (mut triplet, reservation) = guard.into_owned();
+            let eng = asr_engine.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                let r = eng.transcribe_samples(&audio, &mut triplet);
+                (r, triplet)
+            })
+            .await;
+            match result {
+                Ok((Ok(transcript), triplet_back)) if !transcript.text.is_empty() => {
+                    reservation.checkin(triplet_back);
+                    let seg = crate::inference::TranscriptSegment {
+                        text: std::sync::Arc::new(transcript.text),
+                        words: std::sync::Arc::new(transcript.words),
+                        is_final: true,
+                        timestamp: crate::inference::now_timestamp(),
+                    };
+                    let _ = final_tx.send(seg);
+                }
+                Ok((_, triplet_back)) => {
+                    reservation.checkin(triplet_back);
+                }
+                Err(e) => {
+                    tracing::warn!("ASR worker: spawn_blocking panicked: {e}");
+                }
+            }
+        }
+    });
 
     let result: Result<()> = loop {
         // Fast-path deadline / cancel check: if a client streams frames
@@ -1183,6 +1256,19 @@ async fn handle_ws_inner(
                 break Ok(());
             }
 
+            maybe_final = final_rx.recv() => {
+                if let Some(seg) = maybe_final {
+                    let msg = ServerMessage::Final {
+                        text: seg.text.to_string(),
+                        timestamp: seg.timestamp,
+                        words: seg.words.to_vec(),
+                    };
+                    if let Err(e) = send_server_message(&mut sink, &msg).await {
+                        return (triplet_opt, Err(e));
+                    }
+                }
+            }
+
             maybe_msg = tokio::time::timeout(idle_timeout, source.next()) => {
                 let msg = match maybe_msg {
                     Ok(Some(Ok(msg))) => msg,
@@ -1245,7 +1331,14 @@ async fn handle_ws_inner(
                 };
 
                 match outcome {
-                    Ok(FrameOutcome::Continue) => continue,
+                    Ok(FrameOutcome::Continue) => {
+                        if let Some(ref mut state) = state_opt {
+                            for audio in state.vad_pending_asr.drain(..) {
+                                let _ = asr_tx.send(audio);
+                            }
+                        }
+                        continue;
+                    }
                     Ok(FrameOutcome::Break) => break Ok(()),
                     Err(e) => break Err(e),
                 }
@@ -1573,7 +1666,9 @@ mod tests {
         let resp = ws_shutdown_response();
         assert_eq!(resp.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
         // Parse the JSON body.
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["code"], "shutting_down");
     }
@@ -1654,14 +1749,11 @@ mod tests {
         // Cancelling the token must win the `select!` and send Close(1001).
         cancel.cancel();
 
-        let msg = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            ws.next(),
-        )
-        .await
-        .expect("should receive a message within 5s")
-        .expect("stream should not end")
-        .expect("message should not be an error");
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(5), ws.next())
+            .await
+            .expect("should receive a message within 5s")
+            .expect("stream should not end")
+            .expect("message should not be an error");
 
         if let Message::Close(Some(frame)) = msg {
             assert_eq!(

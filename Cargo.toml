@@ -1,6 +1,6 @@
 [package]
 name = "phostt"
-version = "0.2.7"
+version = "0.3.0"
 edition = "2024"
 description = "Local STT server powered by Zipformer-vi RNN-T — on-device Vietnamese speech recognition via ONNX Runtime"
 license = "MIT"
@@ -89,6 +89,7 @@ bytes = "1"
 # Per-IP rate limiting (token bucket, optional — off by default).
 # Implemented in `src/server/rate_limit.rs`; `dashmap` gives lock-free reads.
 dashmap = "6"
+silero = { version = "0.2.0", features = ["bundled"] }
 
 
 [dev-dependencies]

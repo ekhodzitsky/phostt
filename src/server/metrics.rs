@@ -339,17 +339,21 @@ mod tests {
         assert!(text.contains(
             "phostt_http_request_duration_seconds_bucket{method=\"GET\",le=\"0.005\"} 1"
         ));
-        assert!(text.contains(
-            "phostt_http_request_duration_seconds_bucket{method=\"GET\",le=\"0.05\"} 2"
-        ));
+        assert!(
+            text.contains(
+                "phostt_http_request_duration_seconds_bucket{method=\"GET\",le=\"0.05\"} 2"
+            )
+        );
         assert!(
             text.contains(
                 "phostt_http_request_duration_seconds_bucket{method=\"GET\",le=\"0.5\"} 3"
             )
         );
-        assert!(text.contains(
-            "phostt_http_request_duration_seconds_bucket{method=\"GET\",le=\"+Inf\"} 4"
-        ));
+        assert!(
+            text.contains(
+                "phostt_http_request_duration_seconds_bucket{method=\"GET\",le=\"+Inf\"} 4"
+            )
+        );
         assert!(text.contains("phostt_http_request_duration_seconds_count{method=\"GET\"} 4"));
     }
 
@@ -418,7 +422,10 @@ mod tests {
         // Current implementation panics here with "counters lock poisoned".
         r.counter_inc("c", vec![], 1);
         let text = r.render_prometheus();
-        assert!(text.contains("c 1"), "metrics should survive poison: {text}");
+        assert!(
+            text.contains("c 1"),
+            "metrics should survive poison: {text}"
+        );
     }
 
     #[test]
@@ -435,6 +442,9 @@ mod tests {
         }
 
         let text = r.render_prometheus();
-        assert!(text.contains("c 3"), "metrics should accumulate across poison cycles: {text}");
+        assert!(
+            text.contains("c 3"),
+            "metrics should accumulate across poison cycles: {text}"
+        );
     }
 }
