@@ -11,6 +11,8 @@ use crate::error::PhosttError;
 
 use super::engine::Engine;
 use super::features;
+#[cfg(feature = "diarization")]
+use super::diarization;
 use super::{CONTEXT_SIZE, N_MELS, SessionTriplet, TARGET_SAMPLE_RATE};
 use kaldi_native_fbank::fbank::FbankComputer;
 use kaldi_native_fbank::online::{FeatureComputer, OnlineFeature};
@@ -128,6 +130,7 @@ impl DecoderState {
 /// Timestamps are in seconds relative to the start of the audio stream.
 #[derive(Debug, Clone, Serialize)]
 #[non_exhaustive]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct WordInfo {
     /// The recognized word text (BPE tokens joined, `▁` stripped).
     pub word: String,
@@ -638,10 +641,13 @@ pub struct TranscribeResult {
 /// Final segments (`is_final == true`) represent completed utterances after endpointing.
 #[derive(Debug, Clone, Serialize)]
 #[non_exhaustive]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct TranscriptSegment {
     /// Recognized text for this segment.
+    #[cfg_attr(feature = "openapi", schema(value_type = String))]
     pub text: Arc<String>,
     /// Individual words with timing and confidence metadata.
+    #[cfg_attr(feature = "openapi", schema(value_type = Vec<WordInfo>))]
     pub words: Arc<Vec<WordInfo>>,
     /// Whether this segment is final (utterance complete) or partial (interim).
     pub is_final: bool,

@@ -14,6 +14,8 @@ use crate::error::PhosttError;
 
 use super::audio;
 use super::decode;
+#[cfg(feature = "diarization")]
+use super::diarization;
 use super::{
     DecoderState, N_MELS, SessionPool, SessionTriplet, StreamingConfig, TARGET_SAMPLE_RATE,
     TranscribeResult, WordInfo,

@@ -6,6 +6,12 @@ pub mod http;
 pub mod metrics;
 pub mod rate_limit;
 
+#[cfg(feature = "openapi")]
+pub mod openapi;
+
+#[cfg(feature = "redis-rate-limit")]
+pub mod redis_rate_limit;
+
 mod ws;
 pub use ws::{
     FrameOutcome, WsSink, handle_binary_frame, handle_ws, session_deadline_instant, ws_handler,
@@ -376,6 +382,9 @@ pub async fn run_with_config(
         .layer(origin_layer)
         .layer(axum::middleware::from_fn(request_id_middleware))
         .with_state(state);
+
+    #[cfg(feature = "openapi")]
+    let app = app.merge(openapi::router());
 
     tracing::info!("phostt server listening on http://{addr}");
     tracing::info!("  WebSocket: ws://{addr}/v1/ws (legacy alias: ws://{addr}/ws)");

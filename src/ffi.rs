@@ -404,7 +404,7 @@ mod tests {
         assert!(r.is_null());
 
         // null pcm16
-        let dummy_stream = 0x1 as *mut PhosttStream;
+        let dummy_stream = std::ptr::dangling_mut::<PhosttStream>();
         let r = unsafe {
             phostt_stream_process_chunk(
                 engine_ptr,

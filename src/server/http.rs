@@ -59,14 +59,20 @@ pub async fn metrics(State(state): State<Arc<AppState>>) -> Response {
 
 /// Health check response.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct HealthResponse {
+    /// Health status: "ok" or "degraded".
     pub status: String,
+    /// Model identifier.
     pub model: String,
+    /// Server version.
     pub version: String,
 }
 
+
 /// Model info response.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ModelInfo {
     pub id: String,
     pub name: String,
@@ -86,6 +92,7 @@ pub struct ModelInfo {
 
 /// Transcription response.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct TranscribeResponse {
     pub text: String,
     pub words: Vec<crate::inference::WordInfo>,
@@ -159,6 +166,11 @@ async fn checkout_triplet(
 }
 
 /// GET /health — health check for monitoring and Docker HEALTHCHECK.
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/health",
+    responses((status = 200, body = HealthResponse))
+))]
 pub async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
     let engine = &state.engine;
     let status = if engine.pool.available() > 0 || engine.pool.total() == 0 {
@@ -174,6 +186,11 @@ pub async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> 
 }
 
 /// GET /v1/models — list loaded models and capabilities.
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/v1/models",
+    responses((status = 200, body = ModelInfo))
+))]
 pub async fn models(State(state): State<Arc<AppState>>) -> Json<ModelInfo> {
     let engine = &state.engine;
     #[cfg(feature = "diarization")]
@@ -206,6 +223,12 @@ pub async fn models(State(state): State<Arc<AppState>>) -> Json<ModelInfo> {
 /// Accepts raw audio body. Supported formats: WAV, MP3, M4A/AAC, OGG, FLAC.
 /// Max body size enforced by the axum `DefaultBodyLimit` layer configured
 /// from [`RuntimeLimits::body_limit_bytes`] (default 50 MiB).
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/v1/transcribe",
+    request_body = Vec<u8>,
+    responses((status = 200, body = TranscribeResponse))
+))]
 pub async fn transcribe(
     State(state): State<Arc<AppState>>,
     body: Bytes,
@@ -296,6 +319,12 @@ pub async fn transcribe(
 ///
 /// Real streaming: audio is processed chunk-by-chunk inside `spawn_blocking`,
 /// and segments are sent to the SSE stream via an mpsc channel as they are produced.
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/v1/transcribe/stream",
+    request_body = Vec<u8>,
+    responses((status = 200, description = "SSE stream of transcript segments"))
+))]
 pub async fn transcribe_stream(
     State(state): State<Arc<AppState>>,
     body: Bytes,
