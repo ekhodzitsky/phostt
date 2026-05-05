@@ -57,11 +57,11 @@ jobs:
           COMMIT=$(git rev-parse --short HEAD)
           DATE=$(date -u +%Y-%m-%d)
 
-          CPU_LATENCY=$(grep "Mean latency" /tmp/cpu_benchmark.txt | awk '{print $3}')
-          CPU_RTF=$(grep "RTF" /tmp/cpu_benchmark.txt | awk '{print $4}')
+          CPU_LATENCY=$(grep "Mean latency" /tmp/cpu_benchmark.txt | sed 's/.*| \([0-9.]*\) ms.*/\1/')
+          CPU_RTF=$(grep "RTF" /tmp/cpu_benchmark.txt | sed 's/.*| \([0-9.]*\)×.*/\1/')
 
-          COREML_LATENCY=$(grep "Mean latency" /tmp/coreml_benchmark.txt | awk '{print $3}')
-          COREML_RTF=$(grep "RTF" /tmp/coreml_benchmark.txt | awk '{print $4}')
+          COREML_LATENCY=$(grep "Mean latency" /tmp/coreml_benchmark.txt | sed 's/.*| \([0-9.]*\) ms.*/\1/')
+          COREML_RTF=$(grep "RTF" /tmp/coreml_benchmark.txt | sed 's/.*| \([0-9.]*\)×.*/\1/')
 
           {
             echo ""
