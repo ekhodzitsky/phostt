@@ -97,6 +97,23 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - run: cargo build --release --features diarization
 
+  build-arm-linux:
+    runs-on: ubuntu-latest
+    name: Build (ARM Linux)
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - run: cargo check --target aarch64-unknown-linux-gnu --release
+
   e2e-tests:
     # Only run on main push — PRs get fast feedback from unit tests + clippy
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
@@ -128,6 +145,14 @@ jobs:
         run: cargo test --test e2e_rest --test e2e_ws --test e2e_errors --test e2e_shutdown -- --ignored --test-threads=1
         timeout-minutes: 30
 
+      - name: Run quality tests (bundled Vietnamese WAVs)
+        run: cargo test --test wer -- --ignored
+        timeout-minutes: 10
+
+      - name: Run load tests
+        run: cargo test --test load_test -- --ignored --test-threads=1
+        timeout-minutes: 10
+
   e2e-pr:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -157,6 +182,10 @@ jobs:
       - name: Run e2e tests
         run: cargo test --test e2e_rest --test e2e_ws --test e2e_errors --test e2e_shutdown -- --ignored --test-threads=1
         timeout-minutes: 30
+
+      - name: Run quality tests (bundled Vietnamese WAVs)
+        run: cargo test --test wer -- --ignored
+        timeout-minutes: 10
 
   audit:
     runs-on: ubuntu-latest

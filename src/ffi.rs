@@ -44,6 +44,9 @@ pub struct PhosttStream {
     state: StreamingState,
     triplet: SessionTriplet,
     reservation: OwnedReservation<SessionTriplet>,
+    /// Pending odd byte from the previous chunk so that callers who split
+    /// their stream on odd boundaries don't accumulate a phase shift.
+    pending_byte: Option<u8>,
 }
 
 /// Load the ONNX models from `model_dir` and create an inference engine.
@@ -225,6 +228,7 @@ pub unsafe extern "C" fn phostt_stream_new(engine: *mut PhosttEngine) -> *mut Ph
         state,
         triplet,
         reservation,
+        pending_byte: None,
     };
     Box::into_raw(Box::new(stream))
 }
@@ -261,9 +265,25 @@ pub unsafe extern "C" fn phostt_stream_process_chunk(
     let engine_ref = unsafe { &(*engine).engine };
     let stream_ref = unsafe { &mut (*stream) };
 
-    // Convert PCM16 LE bytes → f32 samples.
+    // Validate sample rate to avoid division-by-zero or rubato panic.
+    if sample_rate == 0 {
+        tracing::error!("phostt_stream_process_chunk: sample_rate is zero");
+        return ptr::null_mut();
+    }
+
+    // Convert PCM16 LE bytes → f32 samples, preserving an odd trailing byte
+    // across calls (same logic as the WebSocket path).
     let bytes = unsafe { std::slice::from_raw_parts(pcm16_bytes, len) };
-    let pcm16: Vec<i16> = bytes
+    let carry_prev = stream_ref.pending_byte.take();
+    let mut combined = Vec::with_capacity(bytes.len() + 1);
+    if let Some(prev) = carry_prev {
+        combined.push(prev);
+    }
+    combined.extend_from_slice(bytes);
+    if !combined.len().is_multiple_of(2) {
+        stream_ref.pending_byte = combined.pop();
+    }
+    let pcm16: Vec<i16> = combined
         .chunks_exact(2)
         .map(|c| i16::from_le_bytes([c[0], c[1]]))
         .collect();
@@ -305,6 +325,9 @@ pub unsafe extern "C" fn phostt_stream_process_chunk(
 
 /// Flush the streaming state and return the final segment(s).
 ///
+/// Call this **before** `phostt_stream_free` to retrieve any pending transcript.
+/// If you free the stream without flushing, accumulated audio is dropped.
+///
 /// # Safety
 /// `engine` and `stream` must be valid pointers.
 ///
@@ -341,6 +364,9 @@ pub unsafe extern "C" fn phostt_stream_flush(
 }
 
 /// Free a streaming session and return its triplet to the pool.
+///
+/// Any pending transcript that has not been flushed is lost. Call
+/// `phostt_stream_flush` first if you need the final result.
 ///
 /// # Safety
 /// `stream` must be a pointer returned by `phostt_stream_new` and not yet freed,

@@ -11,8 +11,6 @@ use crate::error::PhosttError;
 
 use super::engine::Engine;
 use super::features;
-#[cfg(feature = "diarization")]
-use super::diarization;
 use super::{CONTEXT_SIZE, N_MELS, SessionTriplet, TARGET_SAMPLE_RATE};
 use kaldi_native_fbank::fbank::FbankComputer;
 use kaldi_native_fbank::online::{FeatureComputer, OnlineFeature};
@@ -148,12 +146,8 @@ pub struct WordInfo {
 /// Per-connection diarization state accumulating audio and speaker assignments.
 #[cfg(feature = "diarization")]
 pub struct DiarizationStreamState {
-    /// Raw 16 kHz f32 samples accumulated since the last embedding extraction.
-    pub audio_buffer: Vec<f32>,
-    /// Online speaker cluster tracking centroids across the session.
-    pub cluster: diarization::SpeakerCluster,
-    /// Speaker ID assigned to the most recent segment.
-    pub current_speaker: Option<u32>,
+    /// Online diarizer that buffers audio, extracts embeddings, and clusters speakers.
+    pub diarizer: polyvoice::OnlineDiarizer,
 }
 
 /// Per-connection streaming state that persists across audio chunks.
@@ -210,9 +204,15 @@ impl Engine {
         #[cfg(feature = "diarization")]
         let diarization_state = if diarization_enabled && self.speaker_encoder.is_some() {
             Some(DiarizationStreamState {
-                audio_buffer: Vec::new(),
-                cluster: diarization::SpeakerCluster::new(),
-                current_speaker: None,
+                diarizer: polyvoice::OnlineDiarizer::new(polyvoice::DiarizationConfig {
+                    window_secs: 1.5,
+                    hop_secs: 1.5, // same as window = no overlap, matching old behaviour
+                    threshold: 0.5,
+                    max_speakers: 64,
+                    min_speech_secs: 0.25,
+                    max_gap_secs: 0.5,
+                    sample_rate: polyvoice::SampleRate::new(16000).expect("valid sample rate"),
+                }),
             })
         } else {
             None
@@ -297,16 +297,6 @@ impl Engine {
         state: &mut StreamingState,
         triplet: &mut SessionTriplet,
     ) -> Result<Vec<TranscriptSegment>, PhosttError> {
-        // Keep a copy of the 16kHz samples for diarization before the buffer
-        // logic potentially pads/realigns them. Skip allocation when diarization
-        // is not active for this session.
-        #[cfg(feature = "diarization")]
-        let samples_16k_copy = if state.diarization_state.is_some() {
-            Some(samples.to_vec())
-        } else {
-            None
-        };
-
         state
             .online
             .accept_waveform(TARGET_SAMPLE_RATE as f32, samples);
@@ -359,36 +349,18 @@ impl Engine {
             }
         }
 
-        // --- Diarization: accumulate audio, extract embeddings, assign speakers ---
+        // --- Diarization: feed audio to polyvoice and annotate words ---
         #[cfg(feature = "diarization")]
-        if let (Some(dia), Some(copy), Some(enc)) = (
+        if let (Some(dia), Some(enc)) = (
             state.diarization_state.as_mut(),
-            samples_16k_copy.as_ref(),
             self.speaker_encoder.as_ref(),
         ) {
-            dia.audio_buffer.extend_from_slice(copy);
-
-            while dia.audio_buffer.len() >= diarization::SEGMENT_SAMPLES {
-                let segment: Vec<f32> = dia
-                    .audio_buffer
-                    .drain(..diarization::SEGMENT_SAMPLES)
-                    .collect();
-                match enc.extract_embedding(&segment) {
-                    Ok(embedding) => {
-                        let speaker = dia.cluster.assign(&embedding);
-                        dia.current_speaker = Some(speaker);
-                    }
-                    Err(e) => {
-                        tracing::warn!("Embedding extraction failed: {e:#}");
-                    }
-                }
+            if let Err(e) = dia.diarizer.feed(samples, enc) {
+                tracing::warn!("Diarizer feed failed: {e:#}");
             }
-
-            // Annotate all words in this chunk with current speaker
-            if let Some(speaker_id) = dia.current_speaker {
-                for w in &mut emitted_words {
-                    w.speaker = Some(speaker_id);
-                }
+            let speaker_id = dia.diarizer.current_speaker().map(|s| s.0);
+            for w in &mut emitted_words {
+                w.speaker = speaker_id;
             }
         }
 
@@ -586,15 +558,19 @@ impl Engine {
             let num_frames = state.feature_window.len() / N_MELS;
             let features = &state.feature_window[..];
             let frame_offset = state.total_frames;
-            let (window_words, _endpoint, _enc_len) = self
-                .run_inference(
-                    triplet,
-                    features,
-                    num_frames,
-                    &mut state.decoder,
-                    frame_offset,
-                )
-                .ok()?;
+            let (window_words, _endpoint, _enc_len) = match self.run_inference(
+                triplet,
+                features,
+                num_frames,
+                &mut state.decoder,
+                frame_offset,
+            ) {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::error!("flush_state inference failed: {e:#}");
+                    return None;
+                }
+            };
             let delta = super::delta_words(
                 &window_words,
                 &state.prev_window_words,

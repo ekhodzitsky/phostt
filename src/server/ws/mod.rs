@@ -36,7 +36,9 @@ pub fn ws_shutdown_response() -> Response {
 pub fn session_deadline_instant(max_session_secs: u64) -> tokio::time::Instant {
     tokio::time::Instant::now()
         + if max_session_secs == 0 {
-            std::time::Duration::from_secs(u32::MAX as u64)
+            // Far future (~292 billion years) — avoids u32::MAX overflow on
+            // some tokio Instant backends while still meaning "no limit".
+            std::time::Duration::from_secs(u64::MAX / 4)
         } else {
             std::time::Duration::from_secs(max_session_secs)
         }

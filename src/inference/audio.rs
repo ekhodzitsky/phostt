@@ -293,13 +293,14 @@ fn decode_audio_inner(mss: MediaSourceStream, hint: Hint, source_label: &str) ->
         .make(&track.codec_params, &DecoderOptions::default())
         .context("Unsupported audio codec")?;
 
+    let max_samples: usize = (MAX_DURATION_S * sample_rate as f64) as usize;
     let mut all_samples: Vec<f32> = match n_frames_hint {
         Some(n) if n > 0 && n <= (MAX_DURATION_S as u64 + 1) * sample_rate as u64 => {
-            Vec::with_capacity(n as usize)
+            // Cap capacity to avoid malicious n_frames_hint causing OOM.
+            Vec::with_capacity((n as usize).min(max_samples))
         }
         _ => Vec::new(),
     };
-    let max_samples: usize = (MAX_DURATION_S * sample_rate as f64) as usize;
 
     loop {
         let packet = match format.next_packet() {
@@ -391,11 +392,14 @@ pub fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Result<Vec<f32
     };
 
     let ratio = to_rate as f64 / from_rate as f64;
+    // Process in 5-second chunks to avoid excessive internal allocation
+    // when resampling very large buffers (e.g. 10-minute files).
+    const CHUNK_SAMPLES: usize = TARGET_SAMPLE_RATE as usize * 5;
     let mut resampler = SincFixedIn::<f32>::new(
         ratio,
         2.0,
         params,
-        samples.len(),
+        samples.len().min(CHUNK_SAMPLES),
         1, // mono
     )
     .map_err(|e| anyhow::anyhow!("Resampler init failed: {e}"))?;

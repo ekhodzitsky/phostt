@@ -71,13 +71,7 @@ fn benchmark_latency_and_rtf() {
         mean, rtf
     );
     #[cfg(feature = "coreml")]
-    eprintln!(
-        "| CoreML (Neural Engine) | {:.2} ms | {:.2}× |",
-        mean, rtf
-    );
+    eprintln!("| CoreML (Neural Engine) | {:.2} ms | {:.2}× |", mean, rtf);
     #[cfg(feature = "cuda")]
-    eprintln!(
-        "| CUDA | {:.2} ms | {:.2}× |",
-        mean, rtf
-    );
+    eprintln!("| CUDA | {:.2} ms | {:.2}× |", mean, rtf);
 }

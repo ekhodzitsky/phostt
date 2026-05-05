@@ -25,8 +25,7 @@ pub fn router() -> Router {
     struct ApiDoc;
 
     let doc = ApiDoc::openapi();
-    let swagger = utoipa_swagger_ui::SwaggerUi::new("/docs")
-        .url("/openapi.json", doc.clone());
+    let swagger = utoipa_swagger_ui::SwaggerUi::new("/docs").url("/openapi.json", doc.clone());
 
     Router::new()
         .route("/openapi.json", get(move || async { Json(doc) }))

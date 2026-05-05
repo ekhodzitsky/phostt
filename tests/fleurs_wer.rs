@@ -53,10 +53,15 @@ fn wer(reference: &str, hypothesis: &str) -> f64 {
 #[ignore = "Requires FLEURS dataset (~350 WAVs) and model download"]
 fn fleurs_vi_wer_benchmark() {
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    let manifest = match home.as_ref().map(|p| p.join(".phostt/benchmark/fleurs_vi/manifest.tsv")) {
+    let manifest = match home
+        .as_ref()
+        .map(|p| p.join(".phostt/benchmark/fleurs_vi/manifest.tsv"))
+    {
         Some(ref p) if p.exists() => p.clone(),
         _ => {
-            eprintln!("Skipping: FLEURS manifest not found. Run: python scripts/prepare_fleurs_benchmark.py");
+            eprintln!(
+                "Skipping: FLEURS manifest not found. Run: python scripts/prepare_fleurs_benchmark.py"
+            );
             return;
         }
     };
@@ -126,12 +131,16 @@ fn fleurs_vi_wer_benchmark() {
     let mean_wer = total_wer / count as f64;
     eprintln!(
         "FLEURS vi benchmark: {} samples, {} decode failures, mean WER = {:.4} ({:.2}%)",
-        count, failures, mean_wer, mean_wer * 100.0
+        count,
+        failures,
+        mean_wer,
+        mean_wer * 100.0
     );
 
     assert!(
         mean_wer <= MAX_MEAN_WER,
         "Mean WER {:.4} exceeds threshold {:.4}",
-        mean_wer, MAX_MEAN_WER
+        mean_wer,
+        MAX_MEAN_WER
     );
 }

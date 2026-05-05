@@ -15,11 +15,11 @@
 mod common;
 
 use phostt::ffi::{
-    PhosttEngine, phostt_engine_free, phostt_stream_flush, phostt_stream_free,
-    phostt_stream_new, phostt_stream_process_chunk, phostt_string_free,
+    PhosttEngine, phostt_engine_free, phostt_stream_flush, phostt_stream_free, phostt_stream_new,
+    phostt_stream_process_chunk, phostt_string_free,
 };
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 

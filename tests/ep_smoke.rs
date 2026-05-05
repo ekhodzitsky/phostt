@@ -21,12 +21,13 @@ fn test_cuda_ep_smoke() {
     let engine = Engine::load(&model_dir).expect("Engine::load with CUDA feature should succeed");
 
     let wav_path = common::test_wav_path(0);
-    let samples = audio::decode_audio_file(wav_path.to_str().unwrap())
-        .expect("WAV decode should succeed");
+    let samples =
+        audio::decode_audio_file(wav_path.to_str().unwrap()).expect("WAV decode should succeed");
 
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let mut triplet = rt.block_on(async { engine.pool.checkout().await.unwrap() });
-    let result = engine.transcribe_samples(&samples, &mut triplet)
+    let result = engine
+        .transcribe_samples(&samples, &mut triplet)
         .expect("Inference with CUDA EP should succeed");
 
     assert!(
@@ -45,12 +46,13 @@ fn test_coreml_ep_smoke() {
     let engine = Engine::load(&model_dir).expect("Engine::load with CoreML feature should succeed");
 
     let wav_path = common::test_wav_path(0);
-    let samples = audio::decode_audio_file(wav_path.to_str().unwrap())
-        .expect("WAV decode should succeed");
+    let samples =
+        audio::decode_audio_file(wav_path.to_str().unwrap()).expect("WAV decode should succeed");
 
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let mut triplet = rt.block_on(async { engine.pool.checkout().await.unwrap() });
-    let result = engine.transcribe_samples(&samples, &mut triplet)
+    let result = engine
+        .transcribe_samples(&samples, &mut triplet)
         .expect("Inference with CoreML EP should succeed");
 
     assert!(

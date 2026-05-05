@@ -45,12 +45,12 @@ jobs:
       - name: Run CPU benchmark
         id: cpu
         run: |
-          cargo test --release --test benchmark_report -- --ignored --nocapture 2>&1 | tee /tmp/cpu_benchmark.txt
+          /usr/bin/time -l cargo test --release --test benchmark_report -- --ignored --nocapture 2>&1 | tee /tmp/cpu_benchmark.txt
 
       - name: Run CoreML benchmark
         id: coreml
         run: |
-          cargo test --release --test benchmark_report --features coreml -- --ignored --nocapture 2>&1 | tee /tmp/coreml_benchmark.txt
+          /usr/bin/time -l cargo test --release --test benchmark_report --features coreml -- --ignored --nocapture 2>&1 | tee /tmp/coreml_benchmark.txt
 
       - name: Parse results and update BENCHMARKS.md
         run: |
@@ -59,9 +59,13 @@ jobs:
 
           CPU_LATENCY=$(grep "Mean latency" /tmp/cpu_benchmark.txt | sed 's/.*| \([0-9.]*\) ms.*/\1/')
           CPU_RTF=$(grep "RTF" /tmp/cpu_benchmark.txt | sed 's/.*| \([0-9.]*\)×.*/\1/')
+          CPU_RSS=$(grep "maximum resident set size" /tmp/cpu_benchmark.txt | awk '{print $1}')
+          CPU_RSS_MB=$(echo "scale=1; $CPU_RSS / 1024 / 1024" | bc)
 
           COREML_LATENCY=$(grep "Mean latency" /tmp/coreml_benchmark.txt | sed 's/.*| \([0-9.]*\) ms.*/\1/')
           COREML_RTF=$(grep "RTF" /tmp/coreml_benchmark.txt | sed 's/.*| \([0-9.]*\)×.*/\1/')
+          COREML_RSS=$(grep "maximum resident set size" /tmp/coreml_benchmark.txt | awk '{print $1}')
+          COREML_RSS_MB=$(echo "scale=1; $COREML_RSS / 1024 / 1024" | bc)
 
           {
             echo ""
@@ -69,10 +73,10 @@ jobs:
             echo ""
             echo "### macOS-14 (Apple Silicon)"
             echo ""
-            echo "| Backend | Mean Latency | RTF |"
-            echo "|---|---|---|"
-            echo "| CPU | ${CPU_LATENCY} ms | ${CPU_RTF} |"
-            echo "| CoreML | ${COREML_LATENCY} ms | ${COREML_RTF} |"
+            echo "| Backend | Mean Latency | RTF | Peak RSS |"
+            echo "|---|---|---|---|"
+            echo "| CPU | ${CPU_LATENCY} ms | ${CPU_RTF} | ${CPU_RSS_MB} MB |"
+            echo "| CoreML | ${COREML_LATENCY} ms | ${COREML_RTF} | ${COREML_RSS_MB} MB |"
           } >> BENCHMARKS.md
 
       - name: Commit benchmark results

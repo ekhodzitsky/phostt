@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-05
+
+### Added
+
+- **Polyvoice diarization integration**. Replaced the internal `SpeakerEncoder` +
+  `SpeakerCluster` stack with `polyvoice::OnlineDiarizer` and
+  `polyvoice::OnnxEmbeddingExtractor` (lock-free pool via `crossbeamqueue`).
+  The `diarization` feature now pulls `polyvoice` instead of in-tree ONNX
+  inference code.
+- **ARM Linux build check** in CI (`aarch64-unknown-linux-gnu`).
+- **WER quality gate** (`cargo test --test wer -- --ignored`) runs in E2E CI
+  against the bundled Vietnamese test WAVs.
+- **Load test** (`cargo test --test load_test -- --ignored --test-threads=1`)
+  runs on every push to `main`.
+- **Peak RSS tracking** in benchmark suite (`scripts/benchmark.sh` and
+  `.github/workflows/benchmark.yml`).
+
+### Fixed
+
+- **Security / resource safety**:
+  - `rustls-webpki` RUSTSEC-2026-0104: updated to 0.103.13.
+  - `flush_state`: replaced silent `.ok()?` with explicit `match` +
+    `tracing::error!`.
+  - `run_inference`: added `encoder_outputs.len() < 2` check to prevent OOB
+    indexing on malformed encoder output.
+  - `extract_encoder_frame`: `debug_assert!` → `assert!` so the bounds check
+    is active in release builds.
+  - `resample`: capped `max_chunk_size` to `TARGET_SAMPLE_RATE * 5` to avoid
+    huge rubato allocations on adversarial input.
+  - `decode_audio_inner`: capped `Vec::with_capacity` to `max_samples` to
+    prevent malicious `n_frames_hint` OOM.
+  - `session_deadline_instant`: `u32::MAX` → `u64::MAX / 4` to avoid
+    `Instant` overflow on macOS.
+- **FFI odd-byte PCM16 handling**: `PhosttStream` now carries `pending_byte`
+  to preserve odd-length PCM16 byte streams across chunk calls, matching the
+  WebSocket handler behaviour exactly.
+
+### Changed
+
+- `scripts/benchmark.sh` refactored to measure latency, RTF, and peak RSS in
+  a single pass per backend using `/usr/bin/time -l` (macOS) / `-v` (Linux).
+- README completely rewritten with badges, platform support matrix,
+  architecture diagram, mobile/FFI section, and quality/WER benchmarks.
+
 ## [0.3.0] - 2026-05-05
 
 ### Added

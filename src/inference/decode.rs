@@ -42,7 +42,10 @@ pub(crate) fn extract_encoder_frame(
     enc_frame: &mut [f32],
 ) {
     let dim = enc_frame.len();
-    debug_assert!(t < encoded_len, "frame index out of range");
+    assert!(
+        t < encoded_len,
+        "frame index {t} out of range {encoded_len}"
+    );
     let start = t * dim;
     enc_frame.copy_from_slice(&encoded[start..start + dim]);
 }

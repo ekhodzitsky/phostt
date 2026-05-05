@@ -110,7 +110,7 @@ pub struct Engine {
     pub(crate) vad_enabled: bool,
     /// Speaker encoder for diarization (None if model file is absent).
     #[cfg(feature = "diarization")]
-    pub(crate) speaker_encoder: Option<super::diarization::SpeakerEncoder>,
+    pub(crate) speaker_encoder: Option<polyvoice::OnnxEmbeddingExtractor>,
 }
 
 impl Engine {
@@ -356,7 +356,7 @@ impl Engine {
         );
 
         #[cfg(feature = "diarization")]
-        let speaker_encoder = match diarization::SpeakerEncoder::load(dir) {
+        let speaker_encoder = match diarization::load_extractor(dir, pool_size) {
             Ok(enc) => {
                 tracing::info!("Speaker encoder loaded (diarization available)");
                 Some(enc)
@@ -487,6 +487,12 @@ impl Engine {
             "encoder_inference"
         );
 
+        if encoder_outputs.len() < 2 {
+            anyhow::bail!(
+                "Encoder produced {} outputs, expected at least 2",
+                encoder_outputs.len()
+            );
+        }
         let (_enc_shape, enc_data) = encoder_outputs[0]
             .try_extract_tensor::<f32>()
             .context("Failed to extract encoder output")?;

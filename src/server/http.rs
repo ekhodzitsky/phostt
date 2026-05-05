@@ -69,7 +69,6 @@ pub struct HealthResponse {
     pub version: String,
 }
 
-
 /// Model info response.
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]

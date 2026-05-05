@@ -17,6 +17,8 @@ allow = [
     "MPL-2.0",
     "OpenSSL",
     "Unicode-DFS-2016",
+    # bzip2/libbz2 license (used by libbz2-rs-sys via bzip2 crate).
+    "bzip2-1.0.6",
     # webpki-root-certs is just the Mozilla CA bundle; CDLA-Permissive-2.0
     # is a community-data license that behaves like MIT for us.
     "CDLA-Permissive-2.0",

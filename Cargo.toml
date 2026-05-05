@@ -1,6 +1,6 @@
 [package]
 name = "phostt"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 description = "Local STT server powered by Zipformer-vi RNN-T — on-device Vietnamese speech recognition via ONNX Runtime"
 license = "MIT"
@@ -14,11 +14,13 @@ categories = ["multimedia::audio", "command-line-utilities"]
 default = []
 coreml = ["ort/coreml"]
 cuda = ["ort/cuda"]
-diarization = []
+diarization = ["dep:polyvoice"]
 ffi = ["ort/nnapi"]
 openapi = ["dep:utoipa", "dep:utoipa-swagger-ui"]
 [dependencies]
 # ONNX Runtime
+# Pinned to rc.12 — the last published pre-release before the 2.0.0 stable
+# cut. Upgrade to stable as soon as it ships (track: https://github.com/pykeio/ort).
 ort = "2.0.0-rc.12"
 
 # Async runtime
@@ -94,6 +96,9 @@ bytes = "1"
 # Implemented in `src/server/rate_limit.rs`; `dashmap` gives lock-free reads.
 dashmap = "6"
 silero = { version = "0.2.0", features = ["bundled"] }
+
+# Speaker diarization — online/offline, ONNX-powered (optional).
+polyvoice = { version = "0.4", features = ["onnx"], optional = true }
 
 
 [dev-dependencies]
