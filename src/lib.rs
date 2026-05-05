@@ -21,7 +21,7 @@
 //! ## Modules
 //!
 //! - [`inference`] — ONNX inference engine, streaming state, audio utilities
-//! - [`error`] — Typed error types ([`GigasttError`](error::GigasttError))
+//! - [`error`] — Typed error types ([`PhosttError`](error::PhosttError))
 //! - [`protocol`] — WebSocket JSON message types
 //! - [`server`] — WebSocket server entry point
 //! - [`model`] — Model download and management
