@@ -1,5 +1,6 @@
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use phostt::inference::{Engine, audio};
+use std::hint::black_box;
 use std::time::Duration;
 
 fn latency_benchmark(c: &mut Criterion) {

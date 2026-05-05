@@ -363,7 +363,7 @@ fn decode_audio_inner(mss: MediaSourceStream, hint: Hint, source_label: &str) ->
     Ok(all_samples)
 }
 
-/// High-quality polyphase FIR resampler (rubato SincFixedIn).
+/// High-quality polyphase FIR resampler (rubato 2.0 Async sinc).
 ///
 /// Non-finite samples (NaN, infinity) are replaced with `0.0` before resampling.
 pub fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Result<Vec<f32>> {
@@ -379,36 +379,77 @@ pub fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Result<Vec<f32
         .map(|&s| if s.is_finite() { s } else { 0.0 })
         .collect();
 
+    use rubato::audioadapter_buffers::direct::InterleavedSlice;
     use rubato::{
-        Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
-    };
-
-    let params = SincInterpolationParameters {
-        sinc_len: 256,
-        f_cutoff: 0.95,
-        interpolation: SincInterpolationType::Linear,
-        oversampling_factor: 256,
-        window: WindowFunction::BlackmanHarris2,
+        Async, FixedAsync, Indexing, Resampler, SincInterpolationParameters, SincInterpolationType,
+        WindowFunction, calculate_cutoff,
     };
 
     let ratio = to_rate as f64 / from_rate as f64;
+    let channels = 1;
     // Process in 5-second chunks to avoid excessive internal allocation
     // when resampling very large buffers (e.g. 10-minute files).
     const CHUNK_SAMPLES: usize = TARGET_SAMPLE_RATE as usize * 5;
-    let mut resampler = SincFixedIn::<f32>::new(
-        ratio,
-        2.0,
-        params,
-        samples.len().min(CHUNK_SAMPLES),
-        1, // mono
-    )
-    .map_err(|e| anyhow::anyhow!("Resampler init failed: {e}"))?;
+    let chunk_size = samples.len().min(CHUNK_SAMPLES);
 
-    let waves_in = vec![samples];
-    let mut waves_out = resampler
-        .process(&waves_in, None)
-        .map_err(|e| anyhow::anyhow!("Resampling failed: {e}"))?;
-    Ok(waves_out.remove(0))
+    let sinc_len = 128;
+    let oversampling_factor = 256;
+    let interpolation = SincInterpolationType::Linear;
+    let window = WindowFunction::BlackmanHarris2;
+    let f_cutoff = calculate_cutoff(sinc_len, window);
+    let params = SincInterpolationParameters {
+        sinc_len,
+        f_cutoff,
+        interpolation,
+        oversampling_factor,
+        window,
+    };
+
+    let mut resampler =
+        Async::<f32>::new_sinc(ratio, 1.1, &params, chunk_size, channels, FixedAsync::Input)
+            .map_err(|e| anyhow::anyhow!("Resampler init failed: {e}"))?;
+
+    let output_capacity = (samples.len() as f64 * ratio) as usize + samples.len();
+    let mut outdata = vec![0.0f32; output_capacity * channels];
+
+    let input_adapter = InterleavedSlice::new(&samples, channels, samples.len())
+        .map_err(|e| anyhow::anyhow!("Resampler input adapter failed: {e}"))?;
+    let outdata_capacity = outdata.len() / channels;
+    let mut output_adapter = InterleavedSlice::new_mut(&mut outdata, channels, outdata_capacity)
+        .map_err(|e| anyhow::anyhow!("Resampler output adapter failed: {e}"))?;
+
+    let mut indexing = Indexing {
+        input_offset: 0,
+        output_offset: 0,
+        active_channels_mask: None,
+        partial_len: None,
+    };
+
+    let mut input_frames_left = samples.len();
+    let mut input_frames_next = resampler.input_frames_next();
+
+    while input_frames_left >= input_frames_next {
+        let (nbr_in, nbr_out) = resampler
+            .process_into_buffer(&input_adapter, &mut output_adapter, Some(&indexing))
+            .map_err(|e| anyhow::anyhow!("Resampling failed: {e}"))?;
+        indexing.input_offset += nbr_in;
+        indexing.output_offset += nbr_out;
+        input_frames_left -= nbr_in;
+        input_frames_next = resampler.input_frames_next();
+    }
+
+    indexing.partial_len = Some(input_frames_left);
+    let (_nbr_in, _nbr_out) = resampler
+        .process_into_buffer(&input_adapter, &mut output_adapter, Some(&indexing))
+        .map_err(|e| anyhow::anyhow!("Resampling final chunk failed: {e}"))?;
+
+    let delay = resampler.output_delay();
+    let expected_out = (samples.len() as f64 * ratio) as usize;
+    Ok(outdata
+        .into_iter()
+        .skip(delay * channels)
+        .take(expected_out * channels)
+        .collect())
 }
 
 /// Prepare audio buffer for processing: merge new samples with leftover,

@@ -105,6 +105,41 @@ Expected output (from the bundled Vietnamese test fixture):
 RỒI CŨNG HỖ TRỢ CHO LÂU LÂU CŨNG CHO GẠO CHO NÀY KIA
 ```
 
+### Usage Examples
+
+**REST API (single file):**
+
+```sh
+curl -X POST http://localhost:9876/v1/transcribe \
+  -H "Content-Type: audio/wav" \
+  --data-binary @sample.wav
+```
+
+**REST API (streaming SSE):**
+
+```sh
+curl -X POST http://localhost:9876/v1/stream \
+  -H "Content-Type: audio/wav" \
+  --data-binary @sample.wav
+```
+
+**WebSocket (real-time):**
+
+```sh
+# Connect and stream PCM16 chunks as you speak
+websocat ws://localhost:9876/v1/ws
+```
+
+**With hardware acceleration:**
+
+```sh
+# macOS Apple Silicon — CoreML Neural Engine
+phostt serve --features coreml
+
+# Linux + NVIDIA — CUDA 12
+phostt serve --features cuda
+```
+
 ### Docker
 
 ```sh
@@ -133,12 +168,9 @@ Auto-updated benchmark history: [`BENCHMARKS.md`](BENCHMARKS.md).
 
 ## Quality / WER
 
-| Dataset | Samples | WER | Notes |
-|---|---|---|---|
-| **GigaSpeech2-vi (clean)** | — | **~7.7%** | Published upstream benchmark on clean Vietnamese speech |
-| **FLEURS Vietnamese** | 857 | **103.08%** | Foreign names, numbers, and English terms transcribed phonetically into Vietnamese |
+**GigaSpeech2-vi (clean): ~7.7%** — published upstream benchmark on clean Vietnamese speech.
 
-> The FLEURS baseline is **intentionally high** — the dataset contains many proper names, digits, and English loanwords that the model transcribes phonetically into Vietnamese. It is used for **regression tracking only** (threshold: 1.05), not as an absolute quality metric. For production-quality assessment, refer to the GigaSpeech2-vi benchmark above.
+For detailed benchmark history (latency, throughput, memory) and regression tracking datasets, see [`BENCHMARKS.md`](BENCHMARKS.md).
 
 ## Architecture
 
@@ -179,9 +211,27 @@ See [`ANDROID.md`](ANDROID.md) for NDK setup, Kotlin bridge (`ffi/android/Phostt
 
 - [x] v0.3.0 — Silero VAD streaming, configurable overlap-buffer, auto-benchmark CI
 - [x] v0.4.0 — Polyvoice diarization, security/resource hardening, benchmark RSS
-- [ ] iOS build verification (CoreML + `ffi` feature)
+- [ ] iOS build verification (CoreML + `ffi` feature) — *theoretically supported, not yet CI-tested*
 - [ ] Quantized embedding extractor for faster diarization
 - [ ] Offline batch re-clustering pass for improved speaker accuracy
+
+## Known Limitations
+
+- **Out-of-domain audio** (English loanwords, numbers, proper names) may produce phonetic Vietnamese transcriptions rather than verbatim text. This is expected for a mono-lingual model trained on ~70,000 hours of Vietnamese speech.
+- **Memory footprint** (~1.4 GB peak RSS) may be too heavy for <2 GB devices. Consider the CPU backend and a smaller batch size for embedded use.
+- **iOS** is theoretically supported via CoreML + `ffi`, but has not been verified in CI.
+- **Windows** builds are community-maintained and not CI-tested.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `Model not found` on first run | Auto-download failed or proxy blocks GitHub | Set `PHOSTT_MODEL_DIR` to a local path with extracted weights |
+| High latency (>200 ms) on CPU | Debug build or missing `release` profile | Always run `cargo run --release` or `cargo install` |
+| CoreML slower than CPU | Neural Engine overhead on short audio | CPU is actually faster for this 30M-param INT8 model; CoreML wins on larger models |
+| `SIGKILL` during model load | OOM on low-RAM system | Close other apps, use CPU backend, or run on a machine with ≥4 GB RAM |
+| WebSocket closes immediately | Rate limit hit or origin mismatch | Check logs; disable rate limiting with `--rate-limit 0` for local testing |
+| Diarization missing speakers | `diarization` feature not enabled | Rebuild with `--features diarization` |
 
 See [`TODO.md`](TODO.md) for the full tracker.
 
