@@ -17,7 +17,6 @@ cuda = ["ort/cuda"]
 diarization = []
 ffi = ["ort/nnapi"]
 openapi = ["dep:utoipa", "dep:utoipa-swagger-ui"]
-redis-rate-limit = ["dep:redis"]
 [dependencies]
 # ONNX Runtime
 ort = "2.0.0-rc.12"
@@ -59,8 +58,6 @@ uuid = { version = "1", features = ["v4"] }
 utoipa = { version = "5", features = ["axum_extras"], optional = true }
 utoipa-swagger-ui = { version = "9", features = ["axum"], optional = true }
 
-# Redis-based rate limiter (optional)
-redis = { version = "0.29", features = ["tokio-comp"], optional = true }
 
 # Kaldi-compatible FBANK feature extractor (pure Rust port of
 # kaldi-native-fbank, the same library sherpa-onnx uses for Zipformer

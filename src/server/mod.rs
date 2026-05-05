@@ -9,8 +9,6 @@ pub mod rate_limit;
 #[cfg(feature = "openapi")]
 pub mod openapi;
 
-#[cfg(feature = "redis-rate-limit")]
-pub mod redis_rate_limit;
 
 mod ws;
 pub use ws::{
