@@ -374,6 +374,7 @@ pub async fn run_with_config(
         .merge(protected)
         .layer(DefaultBodyLimit::max(config.limits.body_limit_bytes))
         .layer(origin_layer)
+        .layer(axum::middleware::from_fn(request_id_middleware))
         .with_state(state);
 
     tracing::info!("phostt server listening on http://{addr}");
@@ -541,6 +542,29 @@ async fn origin_middleware(
                 .into_response()
         }
     }
+}
+
+/// Injects a `x-request-id` header into every request (generating UUIDv4 if
+/// absent) and attaches it to the tracing span so all log lines in the
+/// request carry the same correlation id.
+async fn request_id_middleware(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let request_id = req
+        .headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    let span = tracing::info_span!("request", request_id = %request_id);
+    let mut response = tracing::Instrument::instrument(async move { next.run(req).await }, span).await;
+
+    if let Ok(value) = axum::http::HeaderValue::from_str(&request_id) {
+        response.headers_mut().insert("x-request-id", value);
+    }
+    response
 }
 
 /// Background eviction loop for the per-IP rate limiter. Exited cleanly

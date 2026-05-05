@@ -50,6 +50,9 @@ anyhow = "1"
 # Cryptographic hashing for model verification
 sha2 = "0.10"
 
+# Request ID generation for tracing
+uuid = { version = "1", features = ["v4"] }
+
 # Kaldi-compatible FBANK feature extractor (pure Rust port of
 # kaldi-native-fbank, the same library sherpa-onnx uses for Zipformer
 # preprocessing). Provides povey window + preemphasis + Slaney mel banks

@@ -7,10 +7,8 @@
 # --- Builder stage ---
 FROM nvidia/cuda:12.6.3-devel-ubuntu22.04 AS builder
 
-# `protobuf-compiler` feeds prost-build (build.rs); everything else is the
-# baseline toolchain needed to compile the crate + its C deps.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl build-essential pkg-config protobuf-compiler && \
+    apt-get install -y --no-install-recommends curl build-essential pkg-config ca-certificates && \
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.85.0 && \
     rm -rf /var/lib/apt/lists/*
 
@@ -19,8 +17,7 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 WORKDIR /build
 
 # Dependency-compilation cache (see Dockerfile for rationale).
-COPY Cargo.toml Cargo.lock build.rs ./
-COPY proto/ proto/
+COPY Cargo.toml Cargo.lock ./
 RUN mkdir -p src && \
     echo 'fn main() {}' > src/main.rs && \
     touch src/lib.rs && \

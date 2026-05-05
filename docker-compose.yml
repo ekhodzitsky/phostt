@@ -1,0 +1,20 @@
+services:
+  phostt:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PHOSTT_BAKE_MODEL: "1"
+    ports:
+      - "9876:9876"
+    volumes:
+      - phostt-models:/home/phostt/.phostt/models
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9876/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  phostt-models:

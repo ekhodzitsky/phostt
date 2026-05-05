@@ -160,9 +160,14 @@ async fn checkout_triplet(
 
 /// GET /health — health check for monitoring and Docker HEALTHCHECK.
 pub async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
-    let _ = &state.engine;
+    let engine = &state.engine;
+    let status = if engine.pool.available() > 0 || engine.pool.total() == 0 {
+        "ok"
+    } else {
+        "degraded"
+    };
     Json(HealthResponse {
-        status: "ok".into(),
+        status: status.into(),
         model: "zipformer-vi-rnnt".into(),
         version: env!("CARGO_PKG_VERSION").into(),
     })
