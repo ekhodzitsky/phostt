@@ -212,6 +212,16 @@ fn partial_path(final_path: &Path) -> std::path::PathBuf {
     std::path::PathBuf::from(s)
 }
 
+/// Convert a byte slice to a lowercase hex string.
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        use std::fmt::Write;
+        write!(s, "{:02x}", b).unwrap();
+    }
+    s
+}
+
 /// Compute SHA-256 for a file synchronously, returning the lowercase hex digest.
 /// Uses a buffered reader to avoid loading the entire file into memory.
 fn sha256_file(path: &Path) -> Result<String> {
@@ -228,7 +238,7 @@ fn sha256_file(path: &Path) -> Result<String> {
         }
         hasher.update(&buf[..n]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(bytes_to_hex(hasher.finalize().as_ref()))
 }
 
 /// Verify a staged `.partial` file against `expected_sha256` (when provided)
@@ -473,7 +483,7 @@ mod tests {
     fn sha256_hex(bytes: &[u8]) -> String {
         let mut hasher = Sha256::new();
         hasher.update(bytes);
-        format!("{:x}", hasher.finalize())
+        bytes_to_hex(hasher.finalize().as_ref())
     }
 
     fn stage_partial(final_path: &Path, bytes: &[u8]) -> std::path::PathBuf {

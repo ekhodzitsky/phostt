@@ -51,7 +51,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
 
 # Cryptographic hashing for model verification
-sha2 = "0.10"
+sha2 = "0.11"
 
 # Request ID generation for tracing
 uuid = { version = "1", features = ["v4"] }
