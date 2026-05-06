@@ -21,7 +21,7 @@ RUN mkdir -p src benches && \
     touch src/lib.rs && \
     touch benches/latency.rs && \
     cargo build --release && \
-    rm -rf src benches target/release/deps/phostt-* target/release/phostt*
+    rm -rf src benches target/release/.fingerprint/phostt-* target/release/deps/phostt-* target/release/phostt*
 
 # Now bring in the actual source and build the real binary.
 COPY src/ src/
