@@ -25,11 +25,15 @@ Tracker for remaining work. Current state:
 - [x] GitHub issue templates (bug report + feature request)
 - [x] `SECURITY.md`
 - [x] README badges (downloads, docs.rs, release), table of contents, `docker compose` example
+- [x] Python bindings (PyO3 + maturin) + PyPI CI workflow
 
 ## Open
 
+### Blocked on external
+- [ ] `PyPI publish` — needs API token or trusted-publishing setup in PyPI UI
+
 ### Blocked on release
-- [x] `Formula/phostt.rb`: updated to v0.4.1 URLs — `sha256` placeholders will be auto-filled by `homebrew.yml` on next release workflow run
+- [x] `Formula/phostt.rb`: updated to v0.4.2 URLs — `sha256` filled by `homebrew.yml`
 
 ### Runtime verification (needs GPU hardware)
 - [x] Smoke test harness for CUDA / CoreML EP (`tests/ep_smoke.rs`) — **CoreML verified on M2 Pro**

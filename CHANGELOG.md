@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Python bindings** (`pip install phostt`) via PyO3 + maturin. Exposes `Engine`
+  class with `transcribe_file()` and `transcribe_bytes()`.
+- **PyPI CI** — multi-platform wheel builds (Linux x86_64/ARM64, macOS ARM64)
+  and automatic publish on tag push (trusted publishing).
+
 ## [0.4.2] - 2026-05-06
 
 ### Fixed
