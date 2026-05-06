@@ -25,9 +25,8 @@ RUN mkdir -p src benches && \
 
 # Now bring in the actual source and build the real binary.
 COPY src/ src/
-COPY benches/ benches/
-
-RUN cargo build --release && \
+RUN mkdir -p benches && touch benches/latency.rs && \
+    cargo build --release && \
     strip target/release/phostt
 
 # --- Model bake stage (runs only when PHOSTT_BAKE_MODEL=1) ---
