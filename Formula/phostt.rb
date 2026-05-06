@@ -12,25 +12,25 @@
 class Phostt < Formula
   desc "On-device Vietnamese speech recognition server powered by Zipformer-vi RNN-T"
   homepage "https://github.com/ekhodzitsky/phostt"
-  version "0.4.1"
+  version "0.4.2"
   license "MIT"
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/ekhodzitsky/phostt/releases/download/v0.4.1/phostt-0.4.1-aarch64-apple-darwin.tar.gz"
+      url "https://github.com/ekhodzitsky/phostt/releases/download/v0.4.2/phostt-0.4.2-aarch64-apple-darwin.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000" # placeholder: filled by homebrew.yml on first release
     else
-      url "https://github.com/ekhodzitsky/phostt/releases/download/v0.4.1/phostt-0.4.1-x86_64-apple-darwin.tar.gz"
+      url "https://github.com/ekhodzitsky/phostt/releases/download/v0.4.2/phostt-0.4.2-x86_64-apple-darwin.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000" # placeholder: filled by homebrew.yml on first release
     end
   end
 
   on_linux do
     if Hardware::CPU.intel?
-      url "https://github.com/ekhodzitsky/phostt/releases/download/v0.4.1/phostt-0.4.1-x86_64-unknown-linux-gnu.tar.gz"
+      url "https://github.com/ekhodzitsky/phostt/releases/download/v0.4.2/phostt-0.4.2-x86_64-unknown-linux-gnu.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000" # placeholder: filled by homebrew.yml on first release
     elsif Hardware::CPU.arm? && Hardware::CPU.is_64_bit?
-      url "https://github.com/ekhodzitsky/phostt/releases/download/v0.4.1/phostt-0.4.1-aarch64-unknown-linux-gnu.tar.gz"
+      url "https://github.com/ekhodzitsky/phostt/releases/download/v0.4.2/phostt-0.4.2-aarch64-unknown-linux-gnu.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000" # placeholder: filled by homebrew.yml on first release
     end
   end

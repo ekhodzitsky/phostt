@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-05-06
+
+### Fixed
+
+- **Release CI**: added `g++-aarch64-linux-gnu` and `libc6-dev-arm64-cross` for Linux ARM64 cross-compilation; marked `linux-aarch64` and `macos-x86_64` as experimental (continue-on-error) so they do not block release publication for the primary platforms.
+
+### Changed
+
+- `README.md`: added table of contents, docker compose example, security section.
+- `SECURITY.md`: initial security policy.
+- GitHub issue templates for bug reports and feature requests.
+
 ## [0.4.1] - 2026-05-05
 
 ### Fixed
