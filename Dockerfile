@@ -3,7 +3,7 @@
 # Run:   docker run -p 9876:9876 phostt
 
 # --- Builder stage ---
-FROM rust:1.85-bookworm AS builder
+FROM rust:bookworm AS builder
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates && \
