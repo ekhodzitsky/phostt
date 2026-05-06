@@ -16,11 +16,12 @@ WORKDIR /build
 # Subsequent edits to src/ only invalidate the final compilation layer,
 # cutting incremental rebuild time from minutes to seconds.
 COPY Cargo.toml Cargo.lock ./
-RUN mkdir -p src && \
+RUN mkdir -p src benches && \
     echo 'fn main() {}' > src/main.rs && \
     touch src/lib.rs && \
+    touch benches/latency.rs && \
     cargo build --release && \
-    rm -rf src target/release/deps/phostt-* target/release/phostt*
+    rm -rf src benches target/release/deps/phostt-* target/release/phostt*
 
 # Now bring in the actual source and build the real binary.
 COPY src/ src/
