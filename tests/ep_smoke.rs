@@ -10,8 +10,6 @@
 
 mod common;
 
-use phostt::inference::{Engine, audio};
-
 /// Smoke test: load engine with CUDA EP and transcribe one WAV.
 #[cfg(feature = "cuda")]
 #[test]

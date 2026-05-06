@@ -2,8 +2,8 @@
 
 Tracker for remaining work. Current state:
 
-- HEAD `master` (post-v0.3.0)
-- 154 unit tests green, clippy clean (`-D warnings`)
+- HEAD `master` (post-v0.4.1)
+- 139 unit tests green, clippy clean (`-D warnings`)
 - Runtime smoke test passes: `phostt download` + `phostt transcribe` on bundled WAVs
 
 ## Completed (recent)
@@ -22,11 +22,14 @@ Tracker for remaining work. Current state:
 - [x] Docker hygiene + `docker-compose.yml`
 - [x] Docs CI → GitHub Pages
 - [x] ~~Redis rate limiter~~ — **removed** (use case is edge/desktop/mobile, not multi-instance)
+- [x] GitHub issue templates (bug report + feature request)
+- [x] `SECURITY.md`
+- [x] README badges (downloads, docs.rs, release), table of contents, `docker compose` example
 
 ## Open
 
 ### Blocked on release
-- [ ] `Formula/phostt.rb`: replace placeholder `sha256` after next signed release tag
+- [x] `Formula/phostt.rb`: updated to v0.4.1 URLs — `sha256` placeholders will be auto-filled by `homebrew.yml` on next release workflow run
 
 ### Runtime verification (needs GPU hardware)
 - [x] Smoke test harness for CUDA / CoreML EP (`tests/ep_smoke.rs`) — **CoreML verified on M2 Pro**

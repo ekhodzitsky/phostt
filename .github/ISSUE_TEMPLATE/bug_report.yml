@@ -1,0 +1,88 @@
+name: Bug Report
+description: File a bug report to help improve phostt.
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this bug report.
+        Please check the [Troubleshooting section of the README](https://github.com/ekhodzitsky/phostt#troubleshooting) first.
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: What version of phostt are you running?
+      placeholder: "e.g., 0.4.1"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      description: What platform are you running on?
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux (x86_64)
+        - Linux (ARM64)
+        - Android
+        - Windows
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Backend
+      description: Which inference backend are you using?
+      options:
+        - CPU (default)
+        - CoreML
+        - CUDA
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug description
+      description: Describe the bug clearly and concisely.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Provide a minimal set of steps that consistently reproduces the issue.
+      placeholder: |
+        1. Run `phostt serve ...`
+        2. Send request `curl ...`
+        3. Observe error ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / Output
+      description: Paste relevant log output or error messages (redact sensitive info).
+      render: text
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+      description: Anything else that might help diagnose the issue (audio file format, model source, etc.).
