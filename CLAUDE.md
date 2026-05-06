@@ -8,8 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **Repository**: https://github.com/ekhodzitsky/phostt
 - **License**: MIT
-- **Crates.io**: `phostt` name verified available (not yet published)
-- **Status**: 0.3.0. Forked from [`gigastt`](https://github.com/ekhodzitsky/gigastt) v0.9.4 (Russian STT). The HTTP/WS/SSE/metrics/shutdown stack is production-grade and unchanged. The inference path (model fetch, 80-bin mel features, SentencePiece BPE tokenizer, stateless RNN-T decode, overlap-buffer streaming) is fully wired and tested against Vietnamese audio fixtures.
+- **Crates.io**: published — https://crates.io/crates/phostt
+- **Status**: 0.4.1. Forked from [`gigastt`](https://github.com/ekhodzitsky/gigastt) v0.9.4 (Russian STT). The HTTP/WS/SSE/metrics/shutdown stack is production-grade and unchanged. The inference path (model fetch, 80-bin mel features, SentencePiece BPE tokenizer, stateless RNN-T decode, overlap-buffer streaming) is fully wired and tested against Vietnamese audio fixtures.
 
 ## Build & Test
 

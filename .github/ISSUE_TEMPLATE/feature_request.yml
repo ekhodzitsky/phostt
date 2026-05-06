@@ -1,0 +1,36 @@
+name: Feature Request
+description: Suggest an idea for phostt.
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for sharing your idea. Please check the [Roadmap](https://github.com/ekhodzitsky/phostt#roadmap) first to see if it is already planned.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / Motivation
+      description: What problem are you trying to solve? What is missing?
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: Describe the feature or change you would like to see.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Have you considered other approaches or workarounds?
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Any other context, mockups, or references.

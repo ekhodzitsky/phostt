@@ -4,6 +4,9 @@
   <p align="center">Local STT server powered by Zipformer-vi RNN-T — no cloud, no API keys, full privacy</p>
   <p align="center">
     <a href="https://crates.io/crates/phostt"><img src="https://img.shields.io/crates/v/phostt.svg" alt="Crates.io"></a>
+    <a href="https://crates.io/crates/phostt"><img src="https://img.shields.io/crates/d/phostt.svg" alt="Downloads"></a>
+    <a href="https://docs.rs/phostt"><img src="https://docs.rs/phostt/badge.svg" alt="Docs.rs"></a>
+    <a href="https://github.com/ekhodzitsky/phostt/releases/latest"><img src="https://img.shields.io/github/v/release/ekhodzitsky/phostt?label=release" alt="Release"></a>
     <a href="https://github.com/ekhodzitsky/phostt/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/ekhodzitsky/phostt/ci.yml?branch=main&label=ci" alt="CI"></a>
     <a href="https://github.com/ekhodzitsky/phostt/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
     <a href="https://github.com/ekhodzitsky/phostt/blob/main/CHANGELOG.md"><img src="https://img.shields.io/badge/changelog-Keep%20a%20Changelog-orange" alt="Changelog"></a>
@@ -30,6 +33,29 @@ git clone https://github.com/ekhodzitsky/phostt
 cd phostt
 cargo run --release -- serve
 ```
+
+## Table of Contents
+
+- [Why phostt?](#why-phostt)
+- [Features](#features)
+- [Platform Support](#platform-support)
+- [Quick Start](#quick-start)
+  - [Install](#install)
+  - [Serve](#serve)
+  - [Smoke test](#smoke-test)
+  - [Usage Examples](#usage-examples)
+  - [Docker](#docker)
+- [Benchmarks](#benchmarks)
+- [Quality / WER](#quality--wer)
+- [Architecture](#architecture)
+- [Mobile / FFI](#mobile--ffi)
+- [Roadmap](#roadmap)
+- [Known Limitations](#known-limitations)
+- [Troubleshooting](#troubleshooting)
+- [Contributing](#contributing)
+- [Security](#security)
+- [Acknowledgements](#acknowledgements)
+- [License](#license)
 
 ## Why phostt?
 
@@ -152,6 +178,12 @@ docker build -f Dockerfile.cuda -t phostt-cuda .
 docker run --gpus all -p 9876:9876 phostt-cuda
 ```
 
+Or use Docker Compose:
+
+```sh
+docker compose up
+```
+
 ## Benchmarks
 
 Measured on Apple Silicon M2 Pro, release build, 3.74 s Vietnamese test audio:
@@ -211,6 +243,7 @@ See [`ANDROID.md`](ANDROID.md) for NDK setup, Kotlin bridge (`ffi/android/Phostt
 
 - [x] v0.3.0 — Silero VAD streaming, configurable overlap-buffer, auto-benchmark CI
 - [x] v0.4.0 — Polyvoice diarization, security/resource hardening, benchmark RSS
+- [x] v0.4.1 — Dependency updates (rubato 2.0, sha2 0.11), docs polish, CI improvements
 - [ ] iOS build verification (CoreML + `ffi` feature) — *theoretically supported, not yet CI-tested*
 - [ ] Quantized embedding extractor for faster diarization
 - [ ] Offline batch re-clustering pass for improved speaker accuracy
@@ -245,6 +278,10 @@ cargo test                                # 146 fast unit tests, no model needed
 cargo clippy --all-targets -- -D warnings
 cargo deny check
 ```
+
+## Security
+
+Please report security vulnerabilities privately — see [`SECURITY.md`](SECURITY.md) for contact details and supported versions.
 
 ## Acknowledgements
 
