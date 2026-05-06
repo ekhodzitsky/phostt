@@ -30,7 +30,8 @@ Tracker for remaining work. Current state:
 ## Open
 
 ### Blocked on external
-- [ ] `PyPI publish` — needs API token or trusted-publishing setup in PyPI UI
+- [x] `PyPI publish` — published v0.4.2
+- [x] GHCR Docker images — automatic push on master
 
 ### Blocked on release
 - [x] `Formula/phostt.rb`: updated to v0.4.2 URLs — `sha256` filled by `homebrew.yml`
