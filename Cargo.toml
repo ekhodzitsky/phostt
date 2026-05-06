@@ -10,6 +10,10 @@ authors = ["Eugene Khodzitsky <eugene.khodzitsky@gmail.com>"]
 keywords = ["stt", "speech-recognition", "zipformer", "onnx", "vietnamese"]
 categories = ["multimedia::audio", "command-line-utilities"]
 
+[lib]
+name = "phostt"
+crate-type = ["cdylib", "rlib"]
+
 [features]
 default = []
 coreml = ["ort/coreml"]
@@ -17,6 +21,7 @@ cuda = ["ort/cuda"]
 diarization = ["dep:polyvoice"]
 ffi = ["ort/nnapi"]
 openapi = ["dep:utoipa", "dep:utoipa-swagger-ui"]
+python = ["dep:pyo3"]
 [dependencies]
 # ONNX Runtime
 # Pinned to rc.12 — the last published pre-release before the 2.0.0 stable
@@ -99,6 +104,9 @@ silero = { version = "0.2.0", features = ["bundled"] }
 
 # Speaker diarization — online/offline, ONNX-powered (optional).
 polyvoice = { version = "0.4", features = ["onnx"], optional = true }
+
+# Python bindings via PyO3 (optional, enabled by `python` feature).
+pyo3 = { version = "0.28", features = ["extension-module"], optional = true }
 
 
 [dev-dependencies]

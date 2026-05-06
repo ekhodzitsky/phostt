@@ -1,0 +1,39 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "phostt"
+version = "0.4.2"
+description = "On-device Vietnamese speech recognition — Python bindings for phostt"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+authors = [
+    { name = "Eugene Khodzitsky", email = "eugene.khodzitsky@gmail.com" }
+]
+keywords = ["stt", "speech-recognition", "vietnamese", "onnx", "zipformer"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Rust",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+
+[project.urls]
+Homepage = "https://github.com/ekhodzitsky/phostt"
+Repository = "https://github.com/ekhodzitsky/phostt"
+Documentation = "https://docs.rs/phostt"
+Changelog = "https://github.com/ekhodzitsky/phostt/blob/master/CHANGELOG.md"
+
+[tool.maturin]
+features = ["python"]
+manifest-path = "Cargo.toml"
+python-source = "python"

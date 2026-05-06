@@ -26,6 +26,20 @@ cargo install phostt && phostt serve
 # REST API:  http://127.0.0.1:9876/v1/transcribe
 ```
 
+Or use Python:
+
+```sh
+pip install phostt
+```
+
+```python
+from phostt import Engine
+
+engine = Engine("~/.phostt/models")
+text = engine.transcribe_file("audio.wav")
+print(text)
+```
+
 Or build from source:
 
 ```sh
@@ -41,6 +55,7 @@ cargo run --release -- serve
 - [Platform Support](#platform-support)
 - [Quick Start](#quick-start)
   - [Install](#install)
+  - [Python](#python)
   - [Serve](#serve)
   - [Smoke test](#smoke-test)
   - [Usage Examples](#usage-examples)
@@ -110,6 +125,23 @@ cargo install phostt
 ```
 
 The first run downloads the ~75 MB Zipformer-vi ONNX bundle automatically into `~/.phostt/models/`.
+
+### Python
+
+```sh
+pip install phostt
+```
+
+```python
+from phostt import Engine
+
+engine = Engine("~/.phostt/models")
+text = engine.transcribe_file("audio.wav")
+print(text)
+```
+
+`Engine` is thread-safe — multiple Python threads can call `transcribe_file`
+or `transcribe_bytes` concurrently (limited by the ONNX session pool size).
 
 ### Serve
 
