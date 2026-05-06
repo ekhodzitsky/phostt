@@ -20,8 +20,7 @@ class Phostt < Formula
       url "https://github.com/ekhodzitsky/phostt/releases/download/v0.4.2/phostt-0.4.2-aarch64-apple-darwin.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000" # placeholder: filled by homebrew.yml on first release
     else
-      url "https://github.com/ekhodzitsky/phostt/releases/download/v0.4.2/phostt-0.4.2-x86_64-apple-darwin.tar.gz"
-      sha256 "0000000000000000000000000000000000000000000000000000000000000000" # placeholder: filled by homebrew.yml on first release
+      odie "Intel macOS builds are no longer distributed via Homebrew. Build from source with: cargo install phostt"
     end
   end
 

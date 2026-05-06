@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Release CI**: added `g++-aarch64-linux-gnu` and `libc6-dev-arm64-cross` for Linux ARM64 cross-compilation; marked `linux-aarch64` and `macos-x86_64` as experimental (continue-on-error) so they do not block release publication for the primary platforms.
+- **Release CI**: added `g++-aarch64-linux-gnu` and `libc6-dev-arm64-cross` for Linux ARM64 cross-compilation.
+- **Release CI**: dropped `macos-x86_64` from the release matrix — GitHub no longer provides Intel macOS runners for the free tier. Intel Mac users can build from source.
 
 ### Changed
 

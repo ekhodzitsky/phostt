@@ -47,13 +47,10 @@ jobs:
             asset_suffix: aarch64-unknown-linux-gnu
             cuda: false
             experimental: true
-          - name: macos-x86_64
-            os: macos-13
-            target: x86_64-apple-darwin
-            features: coreml
-            asset_suffix: x86_64-apple-darwin
-            cuda: false
-            experimental: true
+          # macos-x86_64 is intentionally omitted — GitHub-hosted macos-13 runners
+          # are effectively unavailable for the free tier. Intel Mac users can
+          # build from source with `cargo build --release --features coreml`.
+          # Tracked in TODO.md.
           # linux-x86_64-cuda is intentionally omitted until the CUDA install
           # path is stabilized (Jimver/cuda-toolkit breaks on ubuntu-latest for
           # 12.4.x package names). Tracked in specs/todo.md.
