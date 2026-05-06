@@ -7,9 +7,10 @@
     <a href="https://crates.io/crates/phostt"><img src="https://img.shields.io/crates/d/phostt.svg" alt="Downloads"></a>
     <a href="https://docs.rs/phostt"><img src="https://docs.rs/phostt/badge.svg" alt="Docs.rs"></a>
     <a href="https://github.com/ekhodzitsky/phostt/releases/latest"><img src="https://img.shields.io/github/v/release/ekhodzitsky/phostt?label=release" alt="Release"></a>
-    <a href="https://github.com/ekhodzitsky/phostt/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/ekhodzitsky/phostt/ci.yml?branch=main&label=ci" alt="CI"></a>
-    <a href="https://github.com/ekhodzitsky/phostt/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
-    <a href="https://github.com/ekhodzitsky/phostt/blob/main/CHANGELOG.md"><img src="https://img.shields.io/badge/changelog-Keep%20a%20Changelog-orange" alt="Changelog"></a>
+    <a href="https://pypi.org/project/phostt/"><img src="https://img.shields.io/pypi/v/phostt.svg" alt="PyPI"></a>
+    <a href="https://github.com/ekhodzitsky/phostt/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/ekhodzitsky/phostt/ci.yml?branch=master&label=ci" alt="CI"></a>
+    <a href="https://github.com/ekhodzitsky/phostt/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
+    <a href="https://github.com/ekhodzitsky/phostt/blob/master/CHANGELOG.md"><img src="https://img.shields.io/badge/changelog-Keep%20a%20Changelog-orange" alt="Changelog"></a>
   </p>
 </p>
 
@@ -188,6 +189,18 @@ curl -X POST http://localhost:9876/v1/stream \
 websocat ws://localhost:9876/v1/ws
 ```
 
+**Python:**
+
+```python
+from phostt import Engine
+
+engine = Engine("~/.phostt/models")
+text = engine.transcribe_file("audio.wav")
+print(text)
+```
+
+See [`examples/python_binding.py`](examples/python_binding.py) for a runnable demo.
+
 **With hardware acceleration:**
 
 ```sh
@@ -208,6 +221,13 @@ docker run -p 9876:9876 phostt
 # CUDA (Linux + NVIDIA Container Toolkit)
 docker build -f Dockerfile.cuda -t phostt-cuda .
 docker run --gpus all -p 9876:9876 phostt-cuda
+```
+
+Or pull from GitHub Container Registry:
+
+```sh
+docker pull ghcr.io/ekhodzitsky/phostt:latest
+docker run -p 9876:9876 ghcr.io/ekhodzitsky/phostt:latest
 ```
 
 Or use Docker Compose:
