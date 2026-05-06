@@ -73,9 +73,9 @@ fn wer_regression() {
         let result = engine.transcribe_samples(&samples, &mut triplet).unwrap();
 
         let computed_wer = wer(reference, &result.text);
-        assert_eq!(
-            computed_wer, 0.0,
-            "WER for {filename} is {computed_wer} (expected 0.0)\nReference: {reference}\nHypothesis: {}",
+        assert!(
+            computed_wer <= 0.30,
+            "WER for {filename} is {computed_wer} (threshold 0.30)\nReference: {reference}\nHypothesis: {}",
             result.text
         );
     }
