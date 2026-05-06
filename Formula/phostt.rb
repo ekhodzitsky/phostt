@@ -18,7 +18,7 @@ class Phostt < Formula
   on_macos do
     if Hardware::CPU.arm?
       url "https://github.com/ekhodzitsky/phostt/releases/download/v0.4.2/phostt-0.4.2-aarch64-apple-darwin.tar.gz"
-      sha256 "0000000000000000000000000000000000000000000000000000000000000000" # placeholder: filled by homebrew.yml on first release
+      sha256 "86dc0218b13ce422fb00cea539cc9400e6ae7f9de2fcda0f9b2eb2b7ec25da42" # placeholder: filled by homebrew.yml on first release
     else
       odie "Intel macOS builds are no longer distributed via Homebrew. Build from source with: cargo install phostt"
     end
@@ -27,10 +27,10 @@ class Phostt < Formula
   on_linux do
     if Hardware::CPU.intel?
       url "https://github.com/ekhodzitsky/phostt/releases/download/v0.4.2/phostt-0.4.2-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "0000000000000000000000000000000000000000000000000000000000000000" # placeholder: filled by homebrew.yml on first release
+      sha256 "4f363144e31a45b209ccdf8a6078720200a50f90dcf43a0ea82aafffdd74ed7d" # placeholder: filled by homebrew.yml on first release
     elsif Hardware::CPU.arm? && Hardware::CPU.is_64_bit?
       url "https://github.com/ekhodzitsky/phostt/releases/download/v0.4.2/phostt-0.4.2-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "0000000000000000000000000000000000000000000000000000000000000000" # placeholder: filled by homebrew.yml on first release
+      sha256 "39574da7cf012a2077ca23860911a3629db351c392554612e3db489ee18cfe1e" # placeholder: filled by homebrew.yml on first release
     end
   end
 
