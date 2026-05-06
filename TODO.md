@@ -2,7 +2,7 @@
 
 Tracker for remaining work. Current state:
 
-- HEAD `master` (post-v0.4.2)
+- HEAD `master` (post-v0.4.3)
 - 139 unit tests green, clippy clean (`-D warnings`)
 - Runtime smoke test passes: `phostt download` + `phostt transcribe` on bundled WAVs
 

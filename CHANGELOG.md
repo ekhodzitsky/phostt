@@ -7,12 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-05-06
+
 ### Added
 
 - **Python bindings** (`pip install phostt`) via PyO3 + maturin. Exposes `Engine`
   class with `transcribe_file()` and `transcribe_bytes()`.
 - **PyPI CI** — multi-platform wheel builds (Linux x86_64/ARM64, macOS ARM64)
   and automatic publish on tag push (trusted publishing).
+- **GitHub Container Registry** — Docker images published to `ghcr.io` on every
+  push to `master`.
+
+### Fixed
+
+- **Docker build** — switched builder image to `ubuntu:24.04` for glibc 2.39
+  compatibility with ONNX Runtime prebuilt binaries.
+- **Docker build** — added `libssl-dev` and `pkg-config` for `openssl-sys`.
+- **Docker build** — handled `benches/latency.rs` in dependency cache layer and
+  `.dockerignore` exclusion.
+
+## [0.4.2] - 2026-05-06
 
 ## [0.4.2] - 2026-05-06
 
