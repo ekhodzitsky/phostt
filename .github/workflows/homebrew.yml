@@ -28,7 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: main
+          ref: master
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Resolve tag
