@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-05-05
+
+### Fixed
+
+- **rubato 0.16 → 2.0**: migrated `resample()` from removed `SincFixedIn` to
+  `Async::new_sinc` + `audioadapter_buffers::InterleavedSlice`. Output delay
+  now properly accounted for.
+- **sha2 0.10 → 0.11**: added `bytes_to_hex()` helper for digest formatting
+  after `LowerHex` was removed from the new `hybrid_array::Array` type.
+- **criterion deprecation**: replaced `criterion::black_box` with
+  `std::hint::black_box` in benchmarks.
+
+### Changed
+
+- README: added Usage Examples (curl, websocat, SSE), Troubleshooting table,
+  Known Limitations, and honest iOS disclaimer. FLEURS WER moved to
+  `BENCHMARKS.md`.
+- CI: added weekly `check-ort-stable.yml` workflow to auto-open an issue when
+  `ort` 2.0.0+ stable appears on crates.io.
+
 ## [0.4.0] - 2026-05-05
 
 ### Added
