@@ -3,18 +3,22 @@
 # Run:   docker run -p 9876:9876 phostt
 
 # --- Builder stage ---
-FROM rust:bookworm AS builder
+# Ubuntu 24.04 provides glibc 2.39, which satisfies the __isoc23_strtoll
+# symbol required by recent ONNX Runtime prebuilt binaries.
+FROM ubuntu:24.04 AS builder
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates && \
+    apt-get install -y --no-install-recommends ca-certificates curl build-essential && \
     rm -rf /var/lib/apt/lists/*
+
+# Install Rust via rustup (stable toolchain)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+ENV PATH="/root/.cargo/bin:${PATH}"
 
 WORKDIR /build
 
 # Dependency-compilation cache: copy manifests first and compile a dummy
 # binary so `cargo build` downloads + builds every transitive crate.
-# Subsequent edits to src/ only invalidate the final compilation layer,
-# cutting incremental rebuild time from minutes to seconds.
 COPY Cargo.toml Cargo.lock ./
 RUN mkdir -p src benches && \
     echo 'fn main() {}' > src/main.rs && \
@@ -30,7 +34,7 @@ RUN mkdir -p benches && touch benches/latency.rs && \
     strip target/release/phostt
 
 # --- Model bake stage (runs only when PHOSTT_BAKE_MODEL=1) ---
-FROM debian:bookworm-slim AS model-fetcher
+FROM ubuntu:24.04 AS model-fetcher
 
 ARG PHOSTT_BAKE_MODEL=0
 
@@ -46,7 +50,7 @@ RUN mkdir -p /models && \
     fi
 
 # --- Runtime stage ---
-FROM debian:bookworm-slim
+FROM ubuntu:24.04
 
 ARG PHOSTT_BAKE_MODEL=0
 
