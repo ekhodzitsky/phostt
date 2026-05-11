@@ -103,7 +103,7 @@ dashmap = "6"
 silero = { version = "0.2.0", features = ["bundled"] }
 
 # Speaker diarization — online/offline, ONNX-powered (optional).
-polyvoice = { version = "0.4", features = ["onnx"], optional = true }
+polyvoice = { version = "0.5", features = ["onnx"], optional = true }
 
 # Python bindings via PyO3 (optional, enabled by `python` feature).
 pyo3 = { version = "0.28", features = ["extension-module"], optional = true }
