@@ -2575,9 +2575,9 @@ dependencies = [
 
 [[package]]
 name = "silero"
-version = "0.2.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a5ff50ef92854a521d2122e3d2f38b286e7b9459ad90e515e63467e63315e1a"
+checksum = "7f32351f118b2a063d1fbf915a3ea915716c87fdb220f235d85654c900a60288"
 dependencies = [
  "ort",
  "thiserror 2.0.18",
