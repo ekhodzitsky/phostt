@@ -100,7 +100,7 @@ bytes = "1"
 # Per-IP rate limiting (token bucket, optional — off by default).
 # Implemented in `src/server/rate_limit.rs`; `dashmap` gives lock-free reads.
 dashmap = "6"
-silero = { version = "0.2.0", features = ["bundled"] }
+silero = { version = "0.4.0", features = ["bundled"] }
 
 # Speaker diarization — online/offline, ONNX-powered (optional).
 polyvoice = { version = "0.4", features = ["onnx"], optional = true }
