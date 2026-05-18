@@ -84,7 +84,7 @@ tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["rt"] }
 
 # Audio file reading (for `transcribe` command)
-symphonia = { version = "0.5", features = ["aac", "isomp4", "mp3", "ogg", "flac", "pcm", "wav"] }
+symphonia = { version = "0.6", features = ["aac", "isomp4", "mp3", "ogg", "flac", "pcm", "wav"] }
 
 # Bundle extraction for the upstream sherpa-onnx Zipformer-vi release tarball
 # (`*.tar.bz2`). `bzip2` links against system libbz2 (preinstalled on macOS,
