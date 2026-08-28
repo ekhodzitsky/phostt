@@ -30,7 +30,9 @@ impl PyEngine {
     #[new]
     fn new(model_dir: &str) -> PyResult<Self> {
         let engine = Engine::load(model_dir).map_err(|e| match e {
-            PhosttError::ModelLoad(msg) => PyErr::new::<pyo3::exceptions::PyFileNotFoundError, _>(msg),
+            PhosttError::ModelLoad(msg) => {
+                PyErr::new::<pyo3::exceptions::PyFileNotFoundError, _>(msg)
+            }
             PhosttError::Inference(msg) => PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(msg),
             PhosttError::InvalidAudio(msg) => PyErr::new::<pyo3::exceptions::PyValueError, _>(msg),
             PhosttError::Io(err) => PyErr::new::<pyo3::exceptions::PyOSError, _>(format!("{err}")),
@@ -48,14 +50,22 @@ impl PyEngine {
         let path = path.to_string();
         // Run checkout + inference on a dedicated thread so the GIL is released.
         let text = std::thread::spawn(move || {
-            let mut guard = engine.pool.checkout_blocking()
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Pool checkout failed: {e}")))?;
-            let result = engine.transcribe_file(&path, &mut *guard)
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Transcription failed: {e}")))?;
+            let mut guard = engine.pool.checkout_blocking().map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                    "Pool checkout failed: {e}"
+                ))
+            })?;
+            let result = engine.transcribe_file(&path, &mut *guard).map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                    "Transcription failed: {e}"
+                ))
+            })?;
             Ok::<String, PyErr>(result.text)
         })
         .join()
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Thread panicked: {e:?}")))??;
+        .map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Thread panicked: {e:?}"))
+        })??;
         Ok(text)
     }
 
@@ -67,14 +77,22 @@ impl PyEngine {
         let engine = self.engine.clone();
         let data = data.to_vec();
         let text = std::thread::spawn(move || {
-            let mut guard = engine.pool.checkout_blocking()
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Pool checkout failed: {e}")))?;
-            let result = engine.transcribe_bytes(&data, &mut *guard)
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Transcription failed: {e}")))?;
+            let mut guard = engine.pool.checkout_blocking().map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                    "Pool checkout failed: {e}"
+                ))
+            })?;
+            let result = engine.transcribe_bytes(&data, &mut *guard).map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                    "Transcription failed: {e}"
+                ))
+            })?;
             Ok::<String, PyErr>(result.text)
         })
         .join()
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Thread panicked: {e:?}")))??;
+        .map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Thread panicked: {e:?}"))
+        })??;
         Ok(text)
     }
 }

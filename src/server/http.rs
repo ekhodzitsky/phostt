@@ -101,14 +101,23 @@ pub struct TranscribeResponse {
 /// Error response produced by the REST handlers. Using `Response` directly
 /// (rather than a `(StatusCode, Json<_>)` tuple) lets timeout paths attach
 /// a `Retry-After` header without changing the handler signatures.
-type ApiError = Response;
+/// Boxed so `Result<T, ApiError>` stays small (`clippy::result_large_err`).
+pub struct ApiError(Box<Response>);
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        *self.0
+    }
+}
 
 fn api_error(status: StatusCode, msg: &str, code: &str) -> ApiError {
-    (
-        status,
-        Json(serde_json::json!({"error": msg, "code": code})),
-    )
-        .into_response()
+    ApiError(Box::new(
+        (
+            status,
+            Json(serde_json::json!({"error": msg, "code": code})),
+        )
+            .into_response(),
+    ))
 }
 
 /// 503 response for pool-saturation backpressure: carries both the standard
@@ -116,30 +125,34 @@ fn api_error(status: StatusCode, msg: &str, code: &str) -> ApiError {
 /// `retry_after_ms` field in the JSON body so clients on either surface can
 /// back off with the same hint.
 fn api_timeout_error() -> ApiError {
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        [(header::RETRY_AFTER, POOL_RETRY_AFTER_SECS.to_string())],
-        Json(serde_json::json!({
-            "error": "Server busy, try again later",
-            "code": "timeout",
-            "retry_after_ms": POOL_RETRY_AFTER_MS,
-        })),
-    )
-        .into_response()
+    ApiError(Box::new(
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [(header::RETRY_AFTER, POOL_RETRY_AFTER_SECS.to_string())],
+            Json(serde_json::json!({
+                "error": "Server busy, try again later",
+                "code": "timeout",
+                "retry_after_ms": POOL_RETRY_AFTER_MS,
+            })),
+        )
+            .into_response(),
+    ))
 }
 
 /// 503 response for the case where the pool was closed (graceful shutdown
 /// in progress). Distinct from `timeout` so clients can decide whether to
 /// retry: a closed pool is not coming back, so no `retry_after_ms` hint.
 fn api_pool_closed_error() -> ApiError {
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(serde_json::json!({
-            "error": "Server is shutting down",
-            "code": "pool_closed",
-        })),
-    )
-        .into_response()
+    ApiError(Box::new(
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": "Server is shutting down",
+                "code": "pool_closed",
+            })),
+        )
+            .into_response(),
+    ))
 }
 
 /// Checkout a session triplet from the engine pool with a 30-second timeout.
@@ -501,7 +514,7 @@ mod tests {
         let state = test_state(RuntimeLimits::default(), None);
         let result = transcribe(State(state), Bytes::new()).await;
         assert!(result.is_err());
-        let resp = result.unwrap_err();
+        let resp = result.unwrap_err().into_response();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
@@ -513,7 +526,7 @@ mod tests {
         let state = test_state(RuntimeLimits::default(), None);
         let result = transcribe_stream(State(state), Bytes::new()).await;
         assert!(result.is_err());
-        let resp = result.unwrap_err();
+        let resp = result.unwrap_err().into_response();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
@@ -533,7 +546,7 @@ mod tests {
         let state = test_state(limits, None);
         let result = transcribe(State(state), Bytes::from(vec![0u8; 100])).await;
         assert!(result.is_err());
-        let resp = result.unwrap_err();
+        let resp = result.unwrap_err().into_response();
         assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
@@ -549,7 +562,7 @@ mod tests {
         let state = test_state(limits, None);
         let result = transcribe_stream(State(state), Bytes::from(vec![0u8; 100])).await;
         assert!(result.is_err());
-        let resp = result.unwrap_err();
+        let resp = result.unwrap_err().into_response();
         assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
@@ -569,7 +582,7 @@ mod tests {
         tokio::time::advance(std::time::Duration::from_secs(31)).await;
         let result = handle.await.unwrap();
         assert!(result.is_err());
-        let resp = result.unwrap_err();
+        let resp = result.unwrap_err().into_response();
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
             resp.headers().get(header::RETRY_AFTER).unwrap(),
@@ -592,7 +605,7 @@ mod tests {
         tokio::time::advance(std::time::Duration::from_secs(31)).await;
         let result = handle.await.unwrap();
         assert!(result.is_err());
-        let resp = result.unwrap_err();
+        let resp = result.unwrap_err().into_response();
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(
             resp.headers().get(header::RETRY_AFTER).unwrap(),
@@ -614,7 +627,7 @@ mod tests {
         state.engine.pool.close();
         let result = transcribe(State(state), Bytes::from(vec![1u8])).await;
         assert!(result.is_err());
-        let resp = result.unwrap_err();
+        let resp = result.unwrap_err().into_response();
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
@@ -628,7 +641,7 @@ mod tests {
         state.engine.pool.close();
         let result = transcribe_stream(State(state), Bytes::from(vec![1u8])).await;
         assert!(result.is_err());
-        let resp = result.unwrap_err();
+        let resp = result.unwrap_err().into_response();
         assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
