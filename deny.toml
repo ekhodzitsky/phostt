@@ -1,3 +1,7 @@
+[graph]
+# Match CI (`cargo-deny-action` checks optional features such as `python`).
+all-features = true
+
 [advisories]
 version = 2
 yanked = "deny"
@@ -22,6 +26,9 @@ allow = [
     # webpki-root-certs is just the Mozilla CA bundle; CDLA-Permissive-2.0
     # is a community-data license that behaves like MIT for us.
     "CDLA-Permissive-2.0",
+    # target-lexicon (pyo3-build-config) ships Apache-2.0 with the LLVM
+    # exception. Same grant as Apache-2.0 plus an explicit patent/waiver clause.
+    "Apache-2.0 WITH LLVM-exception",
 ]
 
 [bans]
