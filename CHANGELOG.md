@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **polyvoice 0.18** for speaker diarization. `OnlineDiarizer` is replaced by
+  `StreamingPipeline` plus a shared `ResNet34Adapter` session pool. Word labels
+  use midpoint coverage with last-turn fallback for the live tail.
+
 ## [0.4.3] - 2026-05-06
 
 ### Added

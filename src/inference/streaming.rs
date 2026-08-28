@@ -146,8 +146,29 @@ pub struct WordInfo {
 /// Per-connection diarization state accumulating audio and speaker assignments.
 #[cfg(feature = "diarization")]
 pub struct DiarizationStreamState {
-    /// Online diarizer that buffers audio, extracts embeddings, and clusters speakers.
-    pub diarizer: polyvoice::OnlineDiarizer,
+    /// Streaming diarizer (EnergyVad + shared ResNet34 embedder).
+    pub pipeline: polyvoice::streaming::StreamingPipeline<
+        polyvoice::EnergyVad,
+        super::diarization::SharedEmbedder,
+    >,
+}
+
+/// Label each word by midpoint coverage of polyvoice speaker turns.
+/// Uncovered tail words inherit the last turn (live streaming).
+#[cfg(feature = "diarization")]
+fn annotate_words_from_turns(words: &mut [WordInfo], turns: &[polyvoice::SpeakerTurn]) {
+    let speakers = polyvoice::assign_speakers_by_midpoint(
+        words.iter().map(|w| polyvoice::TimeRange {
+            start: w.start,
+            end: w.end,
+        }),
+        turns,
+        polyvoice::UncoveredPolicy::LastTurn,
+        false,
+    );
+    for (word, speaker) in words.iter_mut().zip(speakers) {
+        word.speaker = speaker.map(|id| id.0);
+    }
 }
 
 /// Per-connection streaming state that persists across audio chunks.
@@ -202,18 +223,28 @@ pub struct StreamingState {
 impl Engine {
     pub fn create_state(&self, diarization_enabled: bool) -> Result<StreamingState, PhosttError> {
         #[cfg(feature = "diarization")]
-        let diarization_state = if diarization_enabled && self.speaker_encoder.is_some() {
-            Some(DiarizationStreamState {
-                diarizer: polyvoice::OnlineDiarizer::new(polyvoice::DiarizationConfig {
-                    window_secs: 1.5,
-                    hop_secs: 1.5, // same as window = no overlap, matching old behaviour
-                    threshold: 0.5,
-                    max_speakers: 64,
-                    min_speech_secs: 0.25,
-                    max_gap_secs: 0.5,
-                    sample_rate: polyvoice::SampleRate::new(16000).expect("valid sample rate"),
-                }),
-            })
+        let diarization_state = if diarization_enabled {
+            match self.speaker_encoder.as_ref() {
+                Some(extractor) => {
+                    let vad = polyvoice::EnergyVad::try_new(-40.0, TARGET_SAMPLE_RATE, 512)
+                        .map_err(|e| {
+                            PhosttError::Inference(format!(
+                                "diarization EnergyVad init failed: {e}"
+                            ))
+                        })?;
+                    let pipeline = polyvoice::streaming::StreamingPipeline::with_latency_preset(
+                        vad,
+                        extractor.clone(),
+                        polyvoice::streaming::LatencyPreset::Balanced,
+                        polyvoice::VadConfig::default(),
+                    )
+                    .map_err(|e| {
+                        PhosttError::Inference(format!("diarization pipeline init failed: {e}"))
+                    })?;
+                    Some(DiarizationStreamState { pipeline })
+                }
+                None => None,
+            }
         } else {
             None
         };
@@ -351,17 +382,11 @@ impl Engine {
 
         // --- Diarization: feed audio to polyvoice and annotate words ---
         #[cfg(feature = "diarization")]
-        if let (Some(dia), Some(enc)) = (
-            state.diarization_state.as_mut(),
-            self.speaker_encoder.as_ref(),
-        ) {
-            if let Err(e) = dia.diarizer.feed(samples, enc) {
+        if let Some(dia) = state.diarization_state.as_mut() {
+            if let Err(e) = dia.pipeline.feed(samples) {
                 tracing::warn!("Diarizer feed failed: {e:#}");
             }
-            let speaker_id = dia.diarizer.current_speaker().map(|s| s.0);
-            for w in &mut emitted_words {
-                w.speaker = speaker_id;
-            }
+            annotate_words_from_turns(&mut emitted_words, dia.pipeline.turns());
         }
 
         if emitted_words.is_empty() && !endpoint {
@@ -588,6 +613,15 @@ impl Engine {
             state.prev_window_words = window_words;
             state.feature_window.clear();
             state.total_frames += num_frames / 4;
+        }
+
+        #[cfg(feature = "diarization")]
+        if let Some(dia) = state.diarization_state.as_mut() {
+            if let Err(e) = dia.pipeline.flush() {
+                tracing::warn!("Diarizer flush failed: {e:#}");
+            }
+            let acc_words = Arc::make_mut(&mut state.accumulated_words);
+            annotate_words_from_turns(acc_words, dia.pipeline.turns());
         }
 
         if state.accumulated_text.is_empty() {

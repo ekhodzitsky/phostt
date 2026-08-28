@@ -110,7 +110,7 @@ pub struct Engine {
     pub(crate) vad_enabled: bool,
     /// Speaker encoder for diarization (None if model file is absent).
     #[cfg(feature = "diarization")]
-    pub(crate) speaker_encoder: Option<polyvoice::OnnxEmbeddingExtractor>,
+    pub(crate) speaker_encoder: Option<diarization::SharedEmbedder>,
 }
 
 impl Engine {
