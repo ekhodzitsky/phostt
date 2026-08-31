@@ -74,7 +74,7 @@ utoipa-swagger-ui = { version = "9", features = ["axum"], optional = true }
 kaldi-native-fbank = "0.1"
 
 # High-quality audio resampling
-rubato = "2.0"
+rubato = "5.0"
 
 # Async stream adapters (ReceiverStream for SSE)
 tokio-stream = "0.1"
