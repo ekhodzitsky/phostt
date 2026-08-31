@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     name: Format
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     name: Clippy
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -41,7 +41,7 @@ jobs:
     runs-on: ubuntu-latest
     name: Unit Tests
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/cache@v5
         with:
@@ -56,7 +56,7 @@ jobs:
     runs-on: macos-14
     name: Build (CoreML)
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/cache@v5
         with:
@@ -71,7 +71,7 @@ jobs:
     runs-on: ubuntu-latest
     name: Build (CUDA)
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/cache@v5
         with:
@@ -86,7 +86,7 @@ jobs:
     runs-on: ubuntu-latest
     name: Build (Diarization)
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/cache@v5
         with:
@@ -101,7 +101,7 @@ jobs:
     runs-on: ubuntu-latest
     name: Build (ARM Linux)
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-unknown-linux-gnu
@@ -126,7 +126,7 @@ jobs:
     runs-on: ubuntu-latest
     name: E2E Tests
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/cache@v5
         with:
@@ -164,7 +164,7 @@ jobs:
     runs-on: ubuntu-latest
     name: E2E Tests (PR)
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/cache@v5
         with:
@@ -202,7 +202,7 @@ jobs:
       contents: read
       checks: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       # `rustsec/audit-check` ships a prebuilt cargo-audit, saving the ~90 s
       # `cargo install --locked` rebuild on every PR run.
       - uses: rustsec/audit-check@v2
@@ -213,7 +213,7 @@ jobs:
     runs-on: ubuntu-latest
     name: Cargo Deny
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           # Default `check` covers licenses + advisories + bans + sources.
