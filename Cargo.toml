@@ -24,9 +24,9 @@ openapi = ["dep:utoipa", "dep:utoipa-swagger-ui"]
 python = ["dep:pyo3"]
 [dependencies]
 # ONNX Runtime
-# Pinned to rc.12 — the last published pre-release before the 2.0.0 stable
-# cut. Upgrade to stable as soon as it ships (track: https://github.com/pykeio/ort).
-ort = "2.0.0-rc.12"
+# Latest published is still 2.0.0-rc.13 (ONNX Runtime 1.28). Stable 2.0.0 is
+# not on crates.io yet — check-ort-stable.yml opens an issue when it ships.
+ort = "2.0.0-rc.13"
 
 # Async runtime
 tokio = { version = "1", features = ["full", "test-util"] }
@@ -74,7 +74,7 @@ utoipa-swagger-ui = { version = "9", features = ["axum"], optional = true }
 kaldi-native-fbank = "0.1"
 
 # High-quality audio resampling
-rubato = "2.0"
+rubato = "5.0"
 
 # Async stream adapters (ReceiverStream for SSE)
 tokio-stream = "0.1"
@@ -84,7 +84,7 @@ tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["rt"] }
 
 # Audio file reading (for `transcribe` command)
-symphonia = { version = "0.5", features = ["aac", "isomp4", "mp3", "ogg", "flac", "pcm", "wav"] }
+symphonia = { version = "0.6", features = ["aac", "isomp4", "mp3", "ogg", "flac", "pcm", "wav"] }
 
 # Bundle extraction for the upstream sherpa-onnx Zipformer-vi release tarball
 # (`*.tar.bz2`). `bzip2` links against system libbz2 (preinstalled on macOS,
@@ -100,10 +100,10 @@ bytes = "1"
 # Per-IP rate limiting (token bucket, optional — off by default).
 # Implemented in `src/server/rate_limit.rs`; `dashmap` gives lock-free reads.
 dashmap = "6"
-silero = { version = "0.2.0", features = ["bundled"] }
+silero = { version = "0.7", features = ["bundled"] }
 
 # Speaker diarization — online/offline, ONNX-powered (optional).
-polyvoice = { version = "0.18", features = ["onnx", "embedder"], optional = true }
+polyvoice = { version = "0.19", features = ["onnx", "embedder"], optional = true }
 
 # Python bindings via PyO3 (optional, enabled by `python` feature).
 pyo3 = { version = "0.29", features = ["extension-module"], optional = true }
@@ -111,7 +111,7 @@ pyo3 = { version = "0.29", features = ["extension-module"], optional = true }
 
 [dev-dependencies]
 tempfile = "3"
-tokio-tungstenite = "0.29"
+tokio-tungstenite = "0.30"
 criterion = { version = "0.8", features = ["html_reports"] }
 # `tracing-subscriber` is declared in `[dependencies]`; cargo already exposes
 # it to integration tests, so no separate dev-dep is needed.

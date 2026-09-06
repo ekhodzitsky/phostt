@@ -220,6 +220,35 @@ pub struct StreamingState {
     pub diarization_state: Option<DiarizationStreamState>,
 }
 
+fn collect_vad_segments(
+    session: &mut silero::Session,
+    stream: &mut silero::StreamState,
+    segmenter: &mut silero::SpeechSegmenter,
+    samples: &[f32],
+) -> Result<Vec<silero::SpeechSegment>, PhosttError> {
+    use silero::SpeechSegmenterExt;
+    let mut segments = Vec::new();
+    let mut pending = samples;
+    while let Some(segment) = segmenter
+        .push_samples(session, stream, pending)
+        .map_err(|e| PhosttError::Inference(format!("VAD inference failed: {e}")))?
+    {
+        segments.push(segment);
+        pending = &[];
+    }
+    Ok(segments)
+}
+
+fn vad_buffer_range(
+    segment: &silero::SpeechSegment,
+    buffer_len: usize,
+    buffer_start: u64,
+) -> Option<(usize, usize)> {
+    let buf_start = segment.start_sample().saturating_sub(buffer_start) as usize;
+    let buf_end = (segment.end_sample().saturating_sub(buffer_start) as usize).min(buffer_len);
+    (buf_start < buf_end).then_some((buf_start, buf_end))
+}
+
 impl Engine {
     pub fn create_state(&self, diarization_enabled: bool) -> Result<StreamingState, PhosttError> {
         #[cfg(feature = "diarization")]
@@ -446,16 +475,7 @@ impl Engine {
             let session = state.vad_session.as_mut().unwrap();
             let stream = state.vad_stream_state.as_mut().unwrap();
             let segmenter = state.vad_segmenter.as_mut().unwrap();
-
-            let mut segments: Vec<silero::SpeechSegment> = Vec::new();
-            session
-                .process_stream(stream, samples, |probability| {
-                    if let Some(segment) = segmenter.push_probability(probability) {
-                        segments.push(segment);
-                    }
-                })
-                .map_err(|e| PhosttError::Inference(format!("VAD inference failed: {e}")))?;
-
+            let segments = collect_vad_segments(session, stream, segmenter, samples)?;
             let active = segmenter.is_active();
             (segments, active)
         };
@@ -508,54 +528,58 @@ impl Engine {
         let session = state.vad_session.as_mut()?;
         let stream = state.vad_stream_state.as_mut()?;
         let segmenter = state.vad_segmenter.as_mut()?;
+        use silero::SpeechSegmenterExt;
 
-        // Flush pending VAD samples.
-        if let Ok(Some(probability)) = session.flush_stream(stream)
-            && let Some(segment) = segmenter.push_probability(probability)
-        {
-            let buffer_start = state.vad_sample_offset;
-            let buf_start = segment.start_sample().saturating_sub(buffer_start) as usize;
-            let buf_end = (segment.end_sample().saturating_sub(buffer_start) as usize)
-                .min(state.vad_audio_buffer.len());
-            if buf_start < buf_end {
-                let speech_samples = &state.vad_audio_buffer[buf_start..buf_end];
-                if let Ok(result) = self.transcribe_samples(speech_samples, triplet)
-                    && !result.text.is_empty()
-                {
-                    state.reset_utterance_state();
-                    return Some(TranscriptSegment {
-                        text: Arc::new(result.text),
-                        words: Arc::new(result.words),
-                        is_final: true,
-                        timestamp: now_timestamp(),
-                    });
+        let mut speech_segments = Vec::new();
+        match segmenter.flush_stream(session, stream) {
+            Ok(Some(segment)) => {
+                speech_segments.push(segment);
+                while let Ok(Some(more)) = segmenter.push_samples(session, stream, &[]) {
+                    speech_segments.push(more);
                 }
+            }
+            Ok(None) => {}
+            Err(e) => tracing::warn!("VAD flush failed: {e}"),
+        }
+        match segmenter.finish_stream(session, stream) {
+            Ok(Some(segment)) => {
+                speech_segments.push(segment);
+                while let Ok(Some(more)) = segmenter.push_samples(session, stream, &[]) {
+                    speech_segments.push(more);
+                }
+            }
+            Ok(None) => {}
+            Err(e) => tracing::warn!("VAD finish failed: {e}"),
+        }
+
+        let buffer_start = state.vad_sample_offset;
+        let mut texts = Vec::new();
+        let mut words = Vec::new();
+        for segment in &speech_segments {
+            let Some((buf_start, buf_end)) =
+                vad_buffer_range(segment, state.vad_audio_buffer.len(), buffer_start)
+            else {
+                continue;
+            };
+            let speech_samples = &state.vad_audio_buffer[buf_start..buf_end];
+            if let Ok(result) = self.transcribe_samples(speech_samples, triplet)
+                && !result.text.is_empty()
+            {
+                texts.push(result.text);
+                words.extend(result.words);
             }
         }
 
-        // Close any trailing open segment.
-        if let Some(segment) = segmenter.finish() {
-            let buffer_start = state.vad_sample_offset;
-            let buf_start = segment.start_sample().saturating_sub(buffer_start) as usize;
-            let buf_end = (segment.end_sample().saturating_sub(buffer_start) as usize)
-                .min(state.vad_audio_buffer.len());
-            if buf_start < buf_end {
-                let speech_samples = &state.vad_audio_buffer[buf_start..buf_end];
-                if let Ok(result) = self.transcribe_samples(speech_samples, triplet)
-                    && !result.text.is_empty()
-                {
-                    state.reset_utterance_state();
-                    return Some(TranscriptSegment {
-                        text: Arc::new(result.text),
-                        words: Arc::new(result.words),
-                        is_final: true,
-                        timestamp: now_timestamp(),
-                    });
-                }
-            }
+        if texts.is_empty() {
+            return None;
         }
-
-        None
+        state.reset_utterance_state();
+        Some(TranscriptSegment {
+            text: Arc::new(texts.join(" ")),
+            words: Arc::new(words),
+            is_final: true,
+            timestamp: now_timestamp(),
+        })
     }
 
     /// Flush accumulated text as a Final segment (called on Stop/Close).

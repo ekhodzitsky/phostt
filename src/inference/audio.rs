@@ -2,12 +2,12 @@
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
-use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::DecoderOptions;
-use symphonia::core::formats::FormatOptions;
+use symphonia::core::audio::GenericAudioBufferRef;
+use symphonia::core::codecs::audio::{AudioDecoder, AudioDecoderOptions};
+use symphonia::core::formats::probe::Hint;
+use symphonia::core::formats::{FormatOptions, FormatReader, TrackType};
 use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::Hint;
 
 use super::{HOP_LENGTH, N_FFT, TARGET_SAMPLE_RATE};
 
@@ -163,29 +163,15 @@ where
 {
     let source = BytesMediaSource::new(data);
     let mss = MediaSourceStream::new(Box::new(source), Default::default());
-    let probed = symphonia::default::get_probe()
-        .format(
-            &Hint::new(),
-            mss,
-            &FormatOptions::default(),
-            &MetadataOptions::default(),
-        )
-        .context("Unsupported audio format")?;
+    let OpenedAudio {
+        mut format,
+        mut decoder,
+        track_id,
+        sample_rate,
+        ..
+    } = open_audio(mss, Hint::new())?;
 
-    let mut format = probed.format;
-    let track = format.default_track().context("No audio track found")?;
-    let track_id = track.id;
-    let sample_rate = track
-        .codec_params
-        .sample_rate
-        .context("Unknown sample rate")?;
-    let channels = track.codec_params.channels.map(|c| c.count()).unwrap_or(1);
-
-    tracing::info!("Audio streaming: {sample_rate}Hz, {channels}ch");
-
-    let mut decoder = symphonia::default::get_codecs()
-        .make(&track.codec_params, &DecoderOptions::default())
-        .context("Unsupported audio codec")?;
+    tracing::info!("Audio streaming: {sample_rate}Hz");
 
     let max_samples: usize = (MAX_DURATION_S * sample_rate as f64) as usize;
     let mut total_decoded: usize = 0;
@@ -197,39 +183,17 @@ where
 
     loop {
         let packet = match format.next_packet() {
-            Ok(p) => p,
-            Err(symphonia::core::errors::Error::IoError(ref e))
-                if e.kind() == std::io::ErrorKind::UnexpectedEof =>
-            {
-                break;
-            }
+            Ok(Some(p)) => p,
+            Ok(None) => break,
             Err(e) => return Err(anyhow::anyhow!("Error reading packet: {e}")),
         };
 
-        if packet.track_id() != track_id {
+        if packet.track_id != track_id {
             continue;
         }
 
         let decoded = decoder.decode(&packet).context("Decode error")?;
-        let spec = *decoded.spec();
-        let num_frames = decoded.frames();
-
-        let mut sample_buf = SampleBuffer::<f32>::new(num_frames as u64, spec);
-        sample_buf.copy_interleaved_ref(decoded);
-        let samples = sample_buf.samples();
-
-        // Mix to mono if multi-channel
-        let mono_samples: Vec<f32> = if spec.channels.count() > 1 {
-            let ch = spec.channels.count();
-            (0..num_frames)
-                .map(|frame| {
-                    let sum: f32 = (0..ch).map(|c| samples[frame * ch + c]).sum();
-                    sum / ch as f32
-                })
-                .collect()
-        } else {
-            samples.to_vec()
-        };
+        let mono_samples = decoded_to_mono(decoded);
 
         total_decoded += mono_samples.len();
         if total_decoded > max_samples {
@@ -265,33 +229,85 @@ where
     Ok(())
 }
 
-/// Shared decode logic: probe → format → decode → mono mix → duration check → resample.
-fn decode_audio_inner(mss: MediaSourceStream, hint: Hint, source_label: &str) -> Result<Vec<f32>> {
-    let probed = symphonia::default::get_probe()
-        .format(
+struct OpenedAudio {
+    format: Box<dyn FormatReader>,
+    decoder: Box<dyn AudioDecoder>,
+    track_id: u32,
+    sample_rate: u32,
+    n_frames_hint: Option<u64>,
+}
+
+fn open_audio(mss: MediaSourceStream<'static>, hint: Hint) -> Result<OpenedAudio> {
+    let format = symphonia::default::get_probe()
+        .probe(
             &hint,
             mss,
-            &FormatOptions::default(),
-            &MetadataOptions::default(),
+            FormatOptions::default(),
+            MetadataOptions::default(),
         )
         .context("Unsupported audio format")?;
 
-    let mut format = probed.format;
+    let (track_id, sample_rate, n_frames_hint, audio_params) = {
+        let track = format
+            .default_track(TrackType::Audio)
+            .context("No audio track found")?;
+        let audio_params = track
+            .codec_params
+            .as_ref()
+            .and_then(|params| params.audio())
+            .cloned()
+            .context("No audio codec parameters")?;
+        let sample_rate = audio_params.sample_rate.context("Unknown sample rate")?;
+        let n_frames_hint = track.num_frames;
+        (track.id, sample_rate, n_frames_hint, audio_params)
+    };
 
-    let track = format.default_track().context("No audio track found")?;
-    let track_id = track.id;
-    let sample_rate = track
-        .codec_params
-        .sample_rate
-        .context("Unknown sample rate")?;
-    let channels = track.codec_params.channels.map(|c| c.count()).unwrap_or(1);
-    let n_frames_hint = track.codec_params.n_frames;
-
-    tracing::info!("Audio ({source_label}): {sample_rate}Hz, {channels}ch");
-
-    let mut decoder = symphonia::default::get_codecs()
-        .make(&track.codec_params, &DecoderOptions::default())
+    let decoder = symphonia::default::get_codecs()
+        .make_audio_decoder(&audio_params, &AudioDecoderOptions::default())
         .context("Unsupported audio codec")?;
+
+    Ok(OpenedAudio {
+        format,
+        decoder,
+        track_id,
+        sample_rate,
+        n_frames_hint,
+    })
+}
+
+fn decoded_to_mono(decoded: GenericAudioBufferRef<'_>) -> Vec<f32> {
+    let mut interleaved = Vec::new();
+    decoded.copy_to_vec_interleaved(&mut interleaved);
+    let channels = interleaved.len().checked_div(decoded.frames()).unwrap_or(1);
+    mix_interleaved_to_mono(&interleaved, channels)
+}
+
+fn mix_interleaved_to_mono(samples: &[f32], channels: usize) -> Vec<f32> {
+    if channels <= 1 {
+        samples.to_vec()
+    } else {
+        samples
+            .chunks_exact(channels)
+            .map(|frame| frame.iter().sum::<f32>() / channels as f32)
+            .collect()
+    }
+}
+
+/// Shared decode logic: probe → format → decode → mono mix → duration check → resample.
+fn decode_audio_inner(
+    mss: MediaSourceStream<'static>,
+    hint: Hint,
+    source_label: &str,
+) -> Result<Vec<f32>> {
+    let OpenedAudio {
+        mut format,
+        mut decoder,
+        track_id,
+        sample_rate,
+        n_frames_hint,
+    } = open_audio(mss, hint)?;
+
+    tracing::info!("Audio ({source_label}): {sample_rate}Hz");
 
     let max_samples: usize = (MAX_DURATION_S * sample_rate as f64) as usize;
     let mut all_samples: Vec<f32> = match n_frames_hint {
@@ -304,39 +320,17 @@ fn decode_audio_inner(mss: MediaSourceStream, hint: Hint, source_label: &str) ->
 
     loop {
         let packet = match format.next_packet() {
-            Ok(p) => p,
-            Err(symphonia::core::errors::Error::IoError(ref e))
-                if e.kind() == std::io::ErrorKind::UnexpectedEof =>
-            {
-                break;
-            }
+            Ok(Some(p)) => p,
+            Ok(None) => break,
             Err(e) => return Err(anyhow::anyhow!("Error reading packet: {e}")),
         };
 
-        if packet.track_id() != track_id {
+        if packet.track_id != track_id {
             continue;
         }
 
         let decoded = decoder.decode(&packet).context("Decode error")?;
-        let spec = *decoded.spec();
-        let num_frames = decoded.frames();
-
-        let mut sample_buf = SampleBuffer::<f32>::new(num_frames as u64, spec);
-        sample_buf.copy_interleaved_ref(decoded);
-        let samples = sample_buf.samples();
-
-        if spec.channels.count() > 1 {
-            let ch = spec.channels.count();
-            for frame in 0..num_frames {
-                let mut sum = 0.0_f32;
-                for c in 0..ch {
-                    sum += samples[frame * ch + c];
-                }
-                all_samples.push(sum / ch as f32);
-            }
-        } else {
-            all_samples.extend_from_slice(samples);
-        }
+        all_samples.extend(decoded_to_mono(decoded));
 
         if all_samples.len() > max_samples {
             let observed_s = all_samples.len() as f64 / sample_rate as f64;
@@ -363,7 +357,7 @@ fn decode_audio_inner(mss: MediaSourceStream, hint: Hint, source_label: &str) ->
     Ok(all_samples)
 }
 
-/// High-quality polyphase FIR resampler (rubato 2.0 Async sinc).
+/// High-quality polyphase FIR resampler (rubato 5 Async sinc).
 ///
 /// Non-finite samples (NaN, infinity) are replaced with `0.0` before resampling.
 pub fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Result<Vec<f32>> {
@@ -396,7 +390,7 @@ pub fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Result<Vec<f32
     let oversampling_factor = 256;
     let interpolation = SincInterpolationType::Linear;
     let window = WindowFunction::BlackmanHarris2;
-    let f_cutoff = calculate_cutoff(sinc_len, window);
+    let f_cutoff = Some(calculate_cutoff(sinc_len, window));
     let params = SincInterpolationParameters {
         sinc_len,
         f_cutoff,
