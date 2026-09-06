@@ -7,16 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-06
+
 ### Changed
 
-- **Dependencies.** Latest published crates: `ort 2.0.0-rc.13` (ONNX Runtime
-  1.28; stable `2.0.0` is not on crates.io yet), `polyvoice 0.19`, `silero 0.7`,
-  `rubato 5`, `symphonia 0.6`, `tokio-tungstenite 0.30`. CI actions:
-  `actions/checkout@v7`, `docker/setup-buildx-action@v4`,
-  `docker/login-action@v4`.
-- **polyvoice 0.18** for speaker diarization. `OnlineDiarizer` is replaced by
-  `StreamingPipeline` plus a shared `ResNet34Adapter` session pool. Word labels
+- **Speaker diarization** now uses polyvoice 0.19 `StreamingPipeline` with a
+  shared `ResNet34Adapter` session pool. Replaces `OnlineDiarizer`. Word labels
   use midpoint coverage with last-turn fallback for the live tail.
+- **Silero VAD 0.7** streaming driver (`push_samples` / `finish_stream`).
+- **Dependencies:** `ort 2.0.0-rc.13` (ONNX Runtime 1.28; stable `2.0.0` is not
+  on crates.io yet), `rubato 5`, `symphonia 0.6`, `tokio-tungstenite 0.30`,
+  `pyo3 0.29.2`. CUDA execution provider binaries are CUDA 13.
+
+### Fixed
+
+- CI on current stable: rustfmt, clippy, cargo-deny (including the LLVM
+  exception license), rustsec audit permissions, and the weekly
+  `check-ort-stable` workflow.
 
 ## [0.4.3] - 2026-05-06
 

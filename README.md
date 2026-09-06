@@ -95,7 +95,7 @@ VLSP and GigaSpeech2 benchmarks).
 
 - **Real-time streaming** — partial transcription via WebSocket as you speak
 - **REST API + SSE** — file transcription with instant or streaming response
-- **Hardware acceleration** — CoreML + Neural Engine (macOS), CUDA 12+ (Linux), CPU everywhere
+- **Hardware acceleration** — CoreML + Neural Engine (macOS), CUDA 13+ (Linux), CPU everywhere
 - **Pre-quantized INT8** — encoder ships at ~75 MB INT8 from upstream
 - **Multi-format audio** — WAV, M4A/AAC, MP3, OGG/Vorbis, FLAC
 - **Auto-download** — model fetched from sherpa-onnx GitHub releases on first run
@@ -110,7 +110,7 @@ VLSP and GigaSpeech2 benchmarks).
 |---|---|---|---|
 | macOS (Apple Silicon) | `aarch64-apple-darwin` | CoreML / CPU | Neural Engine + CPU fallback |
 | macOS (Intel) | `x86_64-apple-darwin` | CPU | |
-| Linux (x86_64) | `x86_64-unknown-linux-gnu` | CUDA 12+ / CPU | CUDA via `--features cuda` |
+| Linux (x86_64) | `x86_64-unknown-linux-gnu` | CUDA 13+ / CPU | CUDA via `--features cuda` |
 | Linux (ARM64) | `aarch64-unknown-linux-gnu` | CPU | Buildable, not CI-tested yet |
 | Android | `aarch64-linux-android`, `armv7-linux-androideabi` | NNAPI / CPU | Via `cargo-ndk` + `ffi` feature |
 | Windows | `x86_64-pc-windows-msvc` | CPU | Community-maintained |
@@ -207,7 +207,7 @@ See [`examples/python_binding.py`](examples/python_binding.py) for a runnable de
 # macOS Apple Silicon — CoreML Neural Engine
 phostt serve --features coreml
 
-# Linux + NVIDIA — CUDA 12
+# Linux + NVIDIA — CUDA 13
 phostt serve --features cuda
 ```
 
@@ -296,6 +296,7 @@ See [`ANDROID.md`](ANDROID.md) for NDK setup, Kotlin bridge (`ffi/android/Phostt
 - [x] v0.3.0 — Silero VAD streaming, configurable overlap-buffer, auto-benchmark CI
 - [x] v0.4.0 — Polyvoice diarization, security/resource hardening, benchmark RSS
 - [x] v0.4.1 — Dependency updates (rubato 2.0, sha2 0.11), docs polish, CI improvements
+- [x] v0.5.0 — polyvoice 0.19 streaming diarization, silero 0.7, ort rc.13, rubato 5, symphonia 0.6
 - [ ] iOS build verification (CoreML + `ffi` feature) — *theoretically supported, not yet CI-tested*
 - [ ] Quantized embedding extractor for faster diarization
 - [ ] Offline batch re-clustering pass for improved speaker accuracy

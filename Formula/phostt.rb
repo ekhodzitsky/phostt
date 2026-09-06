@@ -12,12 +12,12 @@
 class Phostt < Formula
   desc "On-device Vietnamese speech recognition server powered by Zipformer-vi RNN-T"
   homepage "https://github.com/ekhodzitsky/phostt"
-  version "0.4.3"
+  version "0.5.0"
   license "MIT"
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/ekhodzitsky/phostt/releases/download/v0.4.3/phostt-0.4.3-aarch64-apple-darwin.tar.gz"
+      url "https://github.com/ekhodzitsky/phostt/releases/download/v0.5.0/phostt-0.5.0-aarch64-apple-darwin.tar.gz"
       sha256 "a25174e8524680ec0fd05c030e9123ffb40e3f389256b31c3f7fe949ee169497" # placeholder: filled by homebrew.yml on first release
     else
       odie "Intel macOS builds are no longer distributed via Homebrew. Build from source with: cargo install phostt"
@@ -26,10 +26,10 @@ class Phostt < Formula
 
   on_linux do
     if Hardware::CPU.intel?
-      url "https://github.com/ekhodzitsky/phostt/releases/download/v0.4.3/phostt-0.4.3-x86_64-unknown-linux-gnu.tar.gz"
+      url "https://github.com/ekhodzitsky/phostt/releases/download/v0.5.0/phostt-0.5.0-x86_64-unknown-linux-gnu.tar.gz"
       sha256 "9a40dddccf8dac438c17d289b9d32c61d14b03cf0a8ccd6e968fb7e428395dc2" # placeholder: filled by homebrew.yml on first release
     elsif Hardware::CPU.arm? && Hardware::CPU.is_64_bit?
-      url "https://github.com/ekhodzitsky/phostt/releases/download/v0.4.3/phostt-0.4.3-aarch64-unknown-linux-gnu.tar.gz"
+      url "https://github.com/ekhodzitsky/phostt/releases/download/v0.5.0/phostt-0.5.0-aarch64-unknown-linux-gnu.tar.gz"
       sha256 "725b7a25f80de3347d7ad7b73006d4d84e4d0cab07f02dc32542cb065b3d2d78" # placeholder: filled by homebrew.yml on first release
     end
   end

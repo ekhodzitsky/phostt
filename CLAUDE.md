@@ -9,14 +9,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Repository**: https://github.com/ekhodzitsky/phostt
 - **License**: MIT
 - **Crates.io**: published — https://crates.io/crates/phostt
-- **Status**: 0.4.3. Forked from [`gigastt`](https://github.com/ekhodzitsky/gigastt) v0.9.4 (Russian STT). The HTTP/WS/SSE/metrics/shutdown stack is production-grade and unchanged. The inference path (model fetch, 80-bin mel features, SentencePiece BPE tokenizer, stateless RNN-T decode, overlap-buffer streaming) is fully wired and tested against Vietnamese audio fixtures.
+- **Status**: 0.5.0. Forked from [`gigastt`](https://github.com/ekhodzitsky/gigastt) v0.9.4 (Russian STT). The HTTP/WS/SSE/metrics/shutdown stack is production-grade and unchanged. The inference path (model fetch, 80-bin mel features, SentencePiece BPE tokenizer, stateless RNN-T decode, overlap-buffer streaming) is fully wired and tested against Vietnamese audio fixtures.
 
 ## Build & Test
 
 ```sh
 cargo build                          # CPU-only debug build (default, any platform)
 cargo build --features coreml        # macOS ARM64 (CoreML / Neural Engine)
-cargo build --features cuda          # Linux x86_64 (CUDA 12+)
+cargo build --features cuda          # Linux x86_64 (CUDA 13+)
 cargo build --release                # Release build (LTO, stripped)
 cargo test                           # Unit tests (no model required)
 cargo clippy                         # Lint (no expected warnings)
