@@ -13,6 +13,7 @@ jobs:
   linux:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         target: [x86_64, aarch64]
     steps:
@@ -37,7 +38,8 @@ jobs:
     runs-on: macos-14
     strategy:
       matrix:
-        target: [x86_64, aarch64]
+        # ort 2.0.0-rc.13 ships no x86_64-apple-darwin ONNX Runtime binaries.
+        target: [aarch64]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
@@ -63,7 +65,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           command: sdist
-          args: --features python --out dist
+          args: --out dist
       - name: Upload sdist
         uses: actions/upload-artifact@v4
         with:
