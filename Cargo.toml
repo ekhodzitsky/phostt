@@ -62,7 +62,7 @@ sha2 = "0.11"
 uuid = { version = "1", features = ["v4"] }
 
 # OpenAPI specification generation (optional)
-utoipa = { version = "5", features = ["axum_extras"], optional = true }
+utoipa = { version = "6", features = ["axum_extras"], optional = true }
 utoipa-swagger-ui = { version = "9", features = ["axum"], optional = true }
 
 
