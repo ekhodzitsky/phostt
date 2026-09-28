@@ -63,7 +63,7 @@ uuid = { version = "1", features = ["v4"] }
 
 # OpenAPI specification generation (optional)
 utoipa = { version = "5", features = ["axum_extras"], optional = true }
-utoipa-swagger-ui = { version = "9", features = ["axum"], optional = true }
+utoipa-swagger-ui = { version = "10", features = ["axum"], optional = true }
 
 
 # Kaldi-compatible FBANK feature extractor (pure Rust port of
